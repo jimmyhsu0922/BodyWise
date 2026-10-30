@@ -21,6 +21,7 @@ const STRINGS = {
   en: {
     'nav.learn': 'Learn',
     'nav.notes': 'Notes',
+    'nav.aiNotes': 'AI Notes',
     'nav.settings': 'Settings',
     'nav.back': 'Back',
 
@@ -52,19 +53,28 @@ const STRINGS = {
     'toast.unmarked': 'Unmarked',
     'toast.needKey': 'Add your API key in Settings first',
 
-    'summary.button': '🖼️ Summary image',
-    'summary.title': 'Summary image',
+    'summary.button': '🖼️ Generate image',
+    'summary.hint': 'Turns your questions in this chat into one image. It’s saved in AI Notes.',
+    'summary.title': 'AI note image',
     'summary.making': 'Reading your conversation and drawing the summary…',
     'summary.download': 'Download',
     'summary.share': 'Share',
     'summary.redo': 'Make a new one',
+    'summary.delete': 'Delete',
+    'summary.confirmDelete': 'Delete this AI note? This cannot be undone.',
+    'summary.saved': 'Saved to AI Notes ✓',
+    'summary.deleted': 'AI note deleted',
     'summary.close': 'Close',
     'summary.needChat': 'Ask the tutor a question first',
     'summary.takeaway': 'Key takeaway',
     'summary.footer': 'Made with Body Study',
-    'summary.outdated': 'You have asked more since this image was made. Tap “Make a new one” to include it.',
+    'summary.outdated': 'You have asked more since this image was made. Tap “Make a new one” to include the new questions.',
     'summary.alt': 'Summary image of the questions asked about {topic}',
     'err.summaryParse': 'The AI reply could not be turned into an image. Please try again.',
+
+    'aiNotes.title': 'AI Notes',
+    'aiNotes.empty': 'No AI notes yet. In any topic, chat with the AI tutor, then tap “Generate image” under the chat — the image is saved here.',
+    'aiNotes.count': (n) => `${n} question${n === 1 ? '' : 's'}`,
 
     'notes.title': 'My Notes',
     'notes.search': 'Search notes…',
@@ -148,6 +158,7 @@ const STRINGS = {
   'zh-Hant': {
     'nav.learn': '學習',
     'nav.notes': '筆記',
+    'nav.aiNotes': 'AI筆記',
     'nav.settings': '設定',
     'nav.back': '返回',
 
@@ -179,12 +190,17 @@ const STRINGS = {
     'toast.unmarked': '已取消標記',
     'toast.needKey': '請先到「設定」輸入 API key',
 
-    'summary.button': '🖼️ 生成重點圖卡',
-    'summary.title': '重點圖卡',
+    'summary.button': '🖼️ 生成圖片',
+    'summary.hint': '把這段對話中你問的問題整理成一張圖，並存到「AI筆記」。',
+    'summary.title': 'AI 筆記圖片',
     'summary.making': '正在整理對話、繪製圖卡…',
     'summary.download': '下載圖片',
     'summary.share': '分享',
     'summary.redo': '重新生成',
+    'summary.delete': '刪除',
+    'summary.confirmDelete': '要刪除這則 AI 筆記嗎？刪除後無法復原。',
+    'summary.saved': '已存到 AI筆記 ✓',
+    'summary.deleted': 'AI 筆記已刪除',
     'summary.close': '關閉',
     'summary.needChat': '先問 AI 導師幾個問題，才能生成圖卡',
     'summary.takeaway': '最重要的一句話',
@@ -192,6 +208,10 @@ const STRINGS = {
     'summary.outdated': '這張圖卡生成後你又問了新問題，按「重新生成」就會包含進去。',
     'summary.alt': '關於{topic}的提問重點圖卡',
     'err.summaryParse': 'AI 的回覆無法轉成圖卡，請再試一次。',
+
+    'aiNotes.title': 'AI筆記',
+    'aiNotes.empty': '還沒有 AI 筆記。在任一主題和 AI 導師對話後，按對話下方的「生成圖片」，圖片就會存在這裡。',
+    'aiNotes.count': (n) => `${n} 個問題`,
 
     'notes.title': '我的筆記',
     'notes.search': '搜尋筆記…',

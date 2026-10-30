@@ -265,7 +265,7 @@ Create the summary card content as JSON with these fields:
 - "points": one item for each key question the student asked, in the order asked, merging repeats; 2 to 6 items. Each has:
   - "emoji": one emoji that represents the point,
   - "question": the key thing they asked, rewritten as a short, clear question (${zh ? '最多 20 個字' : 'at most 12 words'}),
-  - "answer": the core answer from the conversation, accurate and specific (${zh ? '最多 60 個字' : 'at most 35 words'}).
+  - "answer": a direct answer to exactly what the student asked, built from the conversation, accurate and specific (${zh ? '最多 60 個字' : 'at most 35 words'}).
 - "takeaway": the single most important idea to remember, ${zh ? '最多 30 個字' : 'at most 18 words'}.
 Use plain text only (no Markdown). Base everything on the conversation; correct the tutor's wording only if it was scientifically wrong.`;
   const text = await streamReply({ system, messages: [{ role: 'user', content: prompt }], signal, schema: SUMMARY_SCHEMA });

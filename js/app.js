@@ -141,7 +141,6 @@ function topicView(id) {
         <h3>${t('topic.tutor')}</h3>
         <button class="link" id="clear-chat">${t('topic.clearChat')}</button>
       </div>
-      <button class="btn ghost small block summary-btn" id="summary">${t('summary.button')}</button>
       <div class="chat" id="chat"></div>
       <div class="quick">
         ${t(isGeneral ? 'topic.quickGeneral' : 'topic.quick')
@@ -151,6 +150,8 @@ function topicView(id) {
         <textarea id="q" rows="1" placeholder="${t('topic.ask')}" enterkeyhint="send"></textarea>
         <button class="send" id="send" aria-label="${t('topic.send')}">➤</button>
       </form>
+      <button class="btn ghost block summary-btn" id="summary">${t('summary.button')}</button>
+      <p class="muted small center">${t('summary.hint')}</p>
     </section>
 
     <section class="panel">
@@ -245,7 +246,7 @@ function topicView(id) {
   $('#summary').onclick = () => {
     if (activeRequest) return;
     if (!messages.some((m) => m.role === 'user' && !m.error)) { toast(t('summary.needChat')); return; }
-    openSummary(topic, apiHistory(messages));
+    openImageDialog({ topic, history: apiHistory(messages) });
   };
   $('#done')?.addEventListener('click', () => {
     const now = store.toggleDone(topic.id);
@@ -254,12 +255,26 @@ function topicView(id) {
   });
 }
 
-/* ---------- Summary image ---------- */
-// Shows the saved summary image for this topic if the chat hasn't changed
-// since it was made; otherwise asks the AI for a new one.
-function openSummary(topic, history) {
-  const saved = store.getSummary(topic.id);
-  const upToDate = saved && saved.chatLength === history.length && saved.lang === getLang();
+/* ---------- AI notes (summary images) ---------- */
+function cardCanvas(note, topic) {
+  return drawCard(note.card, {
+    color: topic.color,
+    icon: topic.icon,
+    topicName: topic.name,
+    takeawayLabel: t('summary.takeaway'),
+    footer: t('summary.footer'),
+    date: new Date(note.at).toLocaleDateString(locale()),
+  });
+}
+
+const canvasBlob = (canvas) => new Promise((r) => canvas.toBlob(r, 'image/png'));
+
+// The image window. With `history` it belongs to a chat: it shows the newest
+// image if the chat hasn't changed since, or asks the AI for a new one.
+// With `note` it shows a saved AI note from the gallery.
+function openImageDialog({ topic, history, note: givenNote }) {
+  const fromChat = Boolean(history);
+  let note = fromChat ? store.latestAiNote(topic.id) : givenNote;
 
   const dialog = document.createElement('dialog');
   dialog.className = 'sheet';
@@ -272,33 +287,27 @@ function openSummary(topic, history) {
     <div class="actions" id="sum-actions" hidden>
       <button class="btn" id="sum-download">${t('summary.download')}</button>
       <button class="btn ghost" id="sum-share" hidden>${t('summary.share')}</button>
-      <button class="btn ghost" id="sum-redo">${t('summary.redo')}</button>
+      ${fromChat
+        ? `<button class="btn ghost" id="sum-redo">${t('summary.redo')}</button>`
+        : `<button class="btn danger" id="sum-delete">${t('summary.delete')}</button>`}
     </div>`;
   document.body.append(dialog);
   const body = $('#sum-body', dialog);
   const actions = $('#sum-actions', dialog);
   let ctrl = null;
   let blob = null;
-  const fileName = () => `body-study-${topic.id}-${new Date().toISOString().slice(0, 10)}.png`;
+  const fileName = () => `body-study-${topic.id}-${new Date(note?.at || Date.now()).toISOString().slice(0, 10)}.png`;
 
   const close = () => { ctrl?.abort(); dialog.close(); };
   dialog.addEventListener('close', () => dialog.remove());
   $('#sum-close', dialog).onclick = close;
   dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
 
-  const show = async (summary, note = '') => {
-    const canvas = drawCard(summary.card, {
-      color: topic.color,
-      icon: topic.icon,
-      topicName: topic.name,
-      takeawayLabel: t('summary.takeaway'),
-      footer: t('summary.footer'),
-      date: new Date(summary.at).toLocaleDateString(locale()),
-    });
-    blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
-    const url = URL.createObjectURL(blob);
-    body.innerHTML = `${note ? `<p class="muted small">${note}</p>` : ''}<img class="summary-img" alt="${esc(t('summary.alt', { topic: topic.name }))}" src="${url}">`;
+  const show = async (message = '') => {
+    blob = await canvasBlob(cardCanvas(note, topic));
+    body.innerHTML = `${message ? `<p class="muted small">${message}</p>` : ''}<img class="summary-img" alt="${esc(t('summary.alt', { topic: topic.name }))}" src="${URL.createObjectURL(blob)}">`;
     actions.hidden = false;
+    $('#sum-download', dialog).hidden = false;
     const file = new File([blob], fileName(), { type: 'image/png' });
     $('#sum-share', dialog).hidden = !(navigator.canShare && navigator.canShare({ files: [file] }));
   };
@@ -310,9 +319,8 @@ function openSummary(topic, history) {
     ctrl = new AbortController();
     try {
       const card = await summarizeChat({ topic, history, signal: ctrl.signal });
-      const summary = { card, at: Date.now(), chatLength: history.length, lang: getLang() };
-      store.saveSummary(topic.id, summary);
-      await show(summary);
+      note = store.addAiNote({ topic: topic.id, card, at: Date.now(), chatLength: history.length, lang: getLang() });
+      await show(t('summary.saved'));
     } catch (err) {
       if (!dialog.open) return;
       body.innerHTML = `<p class="error">${esc(friendlyError(err))}</p>`;
@@ -334,18 +342,72 @@ function openSummary(topic, history) {
   };
   $('#sum-share', dialog).onclick = async () => {
     try {
-      await navigator.share({ files: [new File([blob], fileName(), { type: 'image/png' })], title: topic.name });
+      await navigator.share({ files: [new File([blob], fileName(), { type: 'image/png' })], title: note.card.title });
     } catch { /* cancelled */ }
   };
-  $('#sum-redo', dialog).onclick = () => {
-    $('#sum-download', dialog).hidden = false;
-    generate();
-  };
+  $('#sum-redo', dialog)?.addEventListener('click', generate);
+  $('#sum-delete', dialog)?.addEventListener('click', () => {
+    if (!confirm(t('summary.confirmDelete'))) return;
+    store.deleteAiNote(note.id);
+    close();
+    toast(t('summary.deleted'));
+    if (location.hash.startsWith('#/ai-notes')) aiNotesView();
+  });
 
   dialog.showModal();
-  if (saved && upToDate) show(saved);
-  else if (saved && saved.lang === getLang()) show(saved, t('summary.outdated'));
+  if (!fromChat) show();
+  else if (note && note.lang === getLang() && note.chatLength === history.length) show();
+  else if (note && note.lang === getLang()) show(t('summary.outdated'));
   else generate();
+}
+
+function aiNotesView() {
+  setTitle(t('aiNotes.title'));
+  setTab('ai-notes');
+  const all = store.getAiNotes();
+  view.innerHTML = `
+    <div class="toolbar">
+      <select id="ai-filter" aria-label="${t('notes.filter')}">
+        <option value="">${t('notes.allTopics')}</option>
+        ${topicOptions('')}
+      </select>
+    </div>
+    <div class="gallery" id="gallery"></div>`;
+
+  const draw = () => {
+    const f = $('#ai-filter').value;
+    const list = all.filter((n) => !f || n.topic === f);
+    const gallery = $('#gallery');
+    if (!list.length) {
+      gallery.innerHTML = `<div class="empty"><p>🖼️</p><p>${t(all.length ? 'notes.noMatch' : 'aiNotes.empty')}</p></div>`;
+      return;
+    }
+    gallery.innerHTML = list.map((n) => {
+      const tp = getTopic(n.topic);
+      return `
+        <button class="ai-note" data-id="${esc(n.id)}" style="--c:${tp?.color || '#888'}">
+          <span class="thumb"><img alt="" data-thumb="${esc(n.id)}"></span>
+          <span class="ai-note-text">
+            <strong>${esc(n.card.title)}</strong>
+            <small>${tp?.icon || ''} ${esc(tp?.name || '')} · ${t('aiNotes.count', { n: n.card.points.length })} · ${fmtDate(n.at)}</small>
+          </span>
+        </button>`;
+    }).join('');
+    // Draw thumbnails after the list is on screen.
+    list.forEach(async (n) => {
+      const tp = getTopic(n.topic);
+      const img = gallery.querySelector(`[data-thumb="${CSS.escape(n.id)}"]`);
+      if (!tp || !img) return;
+      img.src = URL.createObjectURL(await canvasBlob(cardCanvas(n, tp)));
+    });
+    gallery.querySelectorAll('.ai-note').forEach((b) => (b.onclick = () => {
+      const n = store.getAiNote(b.dataset.id);
+      const tp = n && getTopic(n.topic);
+      if (tp) openImageDialog({ topic: tp, note: n });
+    }));
+  };
+  $('#ai-filter').onchange = draw;
+  draw();
 }
 
 // The last turns of the chat, minus failed questions, in user/assistant order.
@@ -649,6 +711,7 @@ function route() {
   if (parts[0] === 'topic' && parts[1]) topicView(parts[1]);
   else if (parts[0] === 'notes') notesView();
   else if (parts[0] === 'note' && parts[1]) noteEditView(parts[1], params);
+  else if (parts[0] === 'ai-notes') aiNotesView();
   else if (parts[0] === 'settings') settingsView();
   else homeView();
   window.scrollTo(0, 0);

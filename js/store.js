@@ -5,7 +5,8 @@ const KEYS = {
   chats: 'bs.chats',
   settings: 'bs.settings',
   done: 'bs.done',
-  summaries: 'bs.summaries',
+  summaries: 'bs.summaries', // older versions; read once to migrate
+  aiNotes: 'bs.aiNotes',
 };
 
 function read(key, fallback) {
@@ -86,15 +87,35 @@ export function saveChat(topicId, messages) {
   write(KEYS.chats, chats);
 }
 
-/* ---------- Summary images (the card text, per topic) ---------- */
-export function getSummary(topicId) {
-  return read(KEYS.summaries, {})[topicId] || null;
+/* ---------- AI notes (generated images; we keep the card text) ---------- */
+// Each: { id, topic, card, at, chatLength, lang }
+export function getAiNotes() {
+  let notes = read(KEYS.aiNotes, null);
+  if (!notes) {
+    // Earlier versions kept one summary per topic; turn those into AI notes.
+    notes = Object.entries(read(KEYS.summaries, {})).map(([topic, s]) => ({ id: String(s.at), topic, ...s }));
+    write(KEYS.aiNotes, notes);
+  }
+  return notes.sort((a, b) => b.at - a.at);
 }
 
-export function saveSummary(topicId, summary) {
-  const all = read(KEYS.summaries, {});
-  all[topicId] = summary;
-  write(KEYS.summaries, all);
+export function getAiNote(id) {
+  return getAiNotes().find((n) => n.id === id) || null;
+}
+
+// The newest AI note for a topic, or null.
+export function latestAiNote(topicId) {
+  return getAiNotes().find((n) => n.topic === topicId) || null;
+}
+
+export function addAiNote(note) {
+  const full = { id: crypto.randomUUID?.() || String(Date.now()), ...note };
+  write(KEYS.aiNotes, [full, ...getAiNotes()]);
+  return full;
+}
+
+export function deleteAiNote(id) {
+  write(KEYS.aiNotes, getAiNotes().filter((n) => n.id !== id));
 }
 
 /* ---------- Topics marked as learned ---------- */
@@ -117,7 +138,7 @@ export function exportData() {
     exportedAt: new Date().toISOString(),
     notes: read(KEYS.notes, []),
     chats: read(KEYS.chats, {}),
-    summaries: read(KEYS.summaries, {}),
+    aiNotes: getAiNotes(),
     done: getDone(),
   }, null, 2);
 }
@@ -133,7 +154,9 @@ export function importData(text) {
   }
   write(KEYS.notes, [...byId.values()]);
   write(KEYS.chats, { ...data.chats, ...read(KEYS.chats, {}) });
-  write(KEYS.summaries, { ...data.summaries, ...read(KEYS.summaries, {}) });
+  const aiById = new Map(getAiNotes().map((n) => [n.id, n]));
+  for (const n of data.aiNotes || []) if (!aiById.has(n.id)) aiById.set(n.id, n);
+  write(KEYS.aiNotes, [...aiById.values()]);
   write(KEYS.done, [...new Set([...getDone(), ...(data.done || [])])]);
   return data.notes.length;
 }

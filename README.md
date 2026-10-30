@@ -5,6 +5,7 @@ A phone-installable web app (PWA) for learning the human body.
 - **Learn** — 12 body-system topics with an overview, key parts and facts, plus "Ask Anything".
 - **AI Tutor** — chat with Claude or Gemini about each topic; it can explain, give examples, and quiz you. It also reads your notes for that topic, so it can correct mistakes.
 - **What I learned** — write what you understand in your own words. Notes are saved on your phone. Tap **Check my understanding** and the AI marks what's right, what to fix, what's missing, and gives a score.
+- **Generate image / AI Notes** — under each chat, **Generate image** turns the questions you asked into one summary image (each question with its answer). Every image is saved in the **AI Notes** tab, where you can view, download, share, or delete it.
 - **Backup** — download or restore your notes as a JSON file (Settings).
 - **Language** — English or 繁體中文 (Settings → Language). The topics, screens, and AI replies all follow the chosen language. The first time it opens, the app picks the phone's language.
 
