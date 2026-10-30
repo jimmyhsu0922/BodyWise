@@ -40,6 +40,9 @@ const DEFAULT_SETTINGS = {
   model: 'claude-opus-5-5',
   geminiKey: '',
   geminiModel: 'gemini-flash-latest',
+  tutorStyle: 'default', // or 'custom'
+  tutorLength: 'medium',
+  tutorCustom: '',
 };
 
 export function getSettings() {

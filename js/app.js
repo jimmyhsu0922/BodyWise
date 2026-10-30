@@ -3,6 +3,7 @@ import * as store from './store.js';
 import { PROVIDERS, claudeModels, geminiModels, hasApiKey, listGeminiModels, askTutor, checkNote, summarizeChat, friendlyError } from './ai.js';
 import { LANGUAGES, t, getLang, locale } from './i18n.js';
 import { drawCard } from './card.js';
+import { STYLE_IDS, LENGTH_IDS, styleInfo, lengthInfo, tutorSettings } from './tutor.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
@@ -138,7 +139,10 @@ function topicView(id) {
 
     <section class="panel">
       <div class="row">
-        <h3>${t('topic.tutor')}</h3>
+        <button class="tutor-head" id="tutor-settings" aria-label="${t('tutor.open')}">
+          <h3>${t('topic.tutor')} <span class="gear">⚙️</span></h3>
+          <small id="tutor-summary">${esc(tutorSummary())}</small>
+        </button>
         <button class="link" id="clear-chat">${t('topic.clearChat')}</button>
       </div>
       <div class="chat" id="chat"></div>
@@ -243,6 +247,7 @@ function topicView(id) {
     store.saveChat(topic.id, messages);
     render();
   };
+  $('#tutor-settings').onclick = () => openTutorSettings(() => { $('#tutor-summary').textContent = tutorSummary(); });
   $('#summary').onclick = () => {
     if (activeRequest) return;
     if (!messages.some((m) => m.role === 'user' && !m.error)) { toast(t('summary.needChat')); return; }
@@ -253,6 +258,92 @@ function topicView(id) {
     toast(t(now ? 'toast.markedDone' : 'toast.unmarked'));
     topicView(id);
   });
+}
+
+/* ---------- AI tutor settings ---------- */
+function tutorSummary() {
+  const { style, length } = tutorSettings();
+  const name = style === 'custom' ? t('tutor.custom') : styleInfo(style).name;
+  return `${name} · ${lengthInfo(length).name}`;
+}
+
+// Type, answer length, and the prompt (preset or the student's own).
+function openTutorSettings(onSaved) {
+  const current = tutorSettings();
+  let style = current.style;
+  let length = current.length;
+  let custom = current.custom;
+
+  const dialog = document.createElement('dialog');
+  dialog.className = 'sheet';
+  dialog.innerHTML = `
+    <div class="sheet-head">
+      <h3>${t('tutor.title')}</h3>
+      <button class="link" id="ts-close">${t('summary.close')}</button>
+    </div>
+    <div class="sheet-body tutor-settings">
+      <p class="muted small">${t('tutor.appliesAll')}</p>
+      <h4>${t('tutor.length')}</h4>
+      <div class="segmented" role="radiogroup" aria-label="${t('tutor.length')}">
+        ${LENGTH_IDS.map((id) => `<button type="button" role="radio" data-length="${id}">${lengthInfo(id).name}</button>`).join('')}
+      </div>
+      <h4>${t('tutor.type')}</h4>
+      <div class="type-list" role="radiogroup" aria-label="${t('tutor.type')}">
+        ${[...STYLE_IDS, 'custom'].map((id) => {
+          const info = id === 'custom' ? { name: t('tutor.custom'), desc: t('tutor.customDesc') } : styleInfo(id);
+          return `<button type="button" role="radio" class="type-option" data-style="${id}"><strong>${esc(info.name)}</strong><small>${esc(info.desc)}</small></button>`;
+        }).join('')}
+      </div>
+      <h4>${t('tutor.prompt')}</h4>
+      <textarea id="ts-prompt" rows="8" placeholder="${t('tutor.promptPh')}"></textarea>
+      <button class="link" id="ts-template" type="button">${t('tutor.useAsTemplate')}</button>
+      <p class="muted small">${t('tutor.fixed')}</p>
+    </div>
+    <div class="actions">
+      <button class="btn ghost" id="ts-reset">${t('tutor.reset')}</button>
+      <button class="btn" id="ts-save">${t('tutor.save')}</button>
+    </div>`;
+  document.body.append(dialog);
+  const promptEl = $('#ts-prompt', dialog);
+
+  const render = () => {
+    dialog.querySelectorAll('[data-length]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.length === length)));
+    dialog.querySelectorAll('[data-style]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.style === style)));
+    const isCustom = style === 'custom';
+    promptEl.readOnly = !isCustom;
+    promptEl.classList.toggle('readonly', !isCustom);
+    promptEl.value = isCustom ? custom : styleInfo(style).prompt;
+    $('#ts-template', dialog).hidden = isCustom;
+  };
+
+  promptEl.addEventListener('input', () => { if (style === 'custom') custom = promptEl.value; });
+  dialog.querySelectorAll('[data-length]').forEach((b) => (b.onclick = () => { length = b.dataset.length; render(); }));
+  dialog.querySelectorAll('[data-style]').forEach((b) => (b.onclick = () => {
+    // Choosing Custom with nothing written yet starts from the type shown before.
+    if (b.dataset.style === 'custom' && !custom.trim() && style !== 'custom') custom = styleInfo(style).prompt;
+    style = b.dataset.style;
+    render();
+  }));
+  $('#ts-template', dialog).onclick = () => {
+    custom = styleInfo(style).prompt;
+    style = 'custom';
+    render();
+    promptEl.focus();
+  };
+  $('#ts-reset', dialog).onclick = () => { style = 'default'; length = 'medium'; render(); };
+  $('#ts-save', dialog).onclick = () => {
+    if (style === 'custom' && !custom.trim()) { toast(t('tutor.needCustom')); promptEl.focus(); return; }
+    store.saveSettings({ tutorStyle: style, tutorLength: length, tutorCustom: custom });
+    dialog.close();
+    toast(t('tutor.saved'));
+    onSaved?.();
+  };
+  $('#ts-close', dialog).onclick = () => dialog.close();
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+  dialog.addEventListener('close', () => dialog.remove());
+
+  render();
+  dialog.showModal();
 }
 
 /* ---------- AI notes (summary images) ---------- */

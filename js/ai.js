@@ -4,6 +4,7 @@
 import Anthropic from 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.135.0/+esm';
 import { getSettings } from './store.js';
 import { t, getLang } from './i18n.js';
+import { teachingPrompt } from './tutor.js';
 
 export const PROVIDERS = [
   { id: 'claude', label: 'Claude (Anthropic)' },
@@ -45,16 +46,16 @@ function tutorSystem(topic, notes) {
   const known = notes.length
     ? `\n\nThe student's own notes on this topic (what they believe they know):\n${notes.map((n) => `- ${n.title}: ${n.body}`).join('\n').slice(0, 6000)}`
     : '';
-  return `You are a friendly, patient study tutor helping a student learn about the human body (anatomy and physiology).
+  // The teaching part comes from the tutor settings (type, length, or the
+  // student's own prompt); the rules after it always apply.
+  return `You are a patient study tutor helping a student learn about the human body (anatomy and physiology).
 ${focus}${known}
 
-How to teach:
-- Explain in plain language first, then add the correct scientific terms.
-- Keep answers short and focused (usually under 200 words). Use short lists and **bold** key terms.
-- Use everyday analogies and real-life examples.
-- When it helps, end with one short question that checks understanding.
-- If the student's notes contain a mistake that is relevant, gently correct it.
-- When asked to quiz, ask one question at a time and wait for the answer.
+How to teach (set by the student):
+${teachingPrompt()}
+
+Always:
+- Keep the science accurate; if unsure, say so.
 - Reply in ${replyLanguage()}, unless the student writes in a different language — then reply in theirs.
 - This is for learning, not diagnosis: if the student describes their own symptoms, give general information and suggest seeing a doctor or nurse.`;
 }

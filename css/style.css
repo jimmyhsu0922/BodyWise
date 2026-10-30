@@ -241,6 +241,30 @@ input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb
 .actions .btn { flex: 1 1 160px; }
 .link { border: 0; background: none; color: var(--muted); font-size: .85rem; cursor: pointer; text-decoration: underline; }
 
+/* ---------- AI tutor settings ---------- */
+.tutor-head {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  border: 0; background: none; padding: 2px 0; cursor: pointer; text-align: left;
+}
+.tutor-head h3 { display: flex; align-items: center; gap: 6px; }
+.tutor-head .gear { font-size: .85rem; opacity: .7; }
+.tutor-head small { color: var(--accent); font-size: .8rem; font-weight: 600; }
+.tutor-settings h4 { margin: 16px 0 8px; font-size: .95rem; }
+.tutor-settings h4:first-of-type { margin-top: 4px; }
+.type-list { display: flex; flex-direction: column; gap: 6px; }
+.type-option {
+  display: flex; flex-direction: column; gap: 2px; text-align: left; cursor: pointer;
+  padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface);
+}
+.type-option small { color: var(--muted); font-size: .8rem; }
+.type-option[aria-checked="true"] {
+  border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+.type-option[aria-checked="true"] strong { color: var(--accent); }
+#ts-prompt { font-size: .9rem; }
+#ts-prompt.readonly { background: var(--surface-2); color: var(--muted); }
+#ts-template { margin-top: 4px; }
+
 /* ---------- Summary image ---------- */
 .summary-btn { margin: 12px 0 6px; }
 .summary-btn + p { margin: 0; }
