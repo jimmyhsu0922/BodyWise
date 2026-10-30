@@ -106,9 +106,24 @@ export function getAiNote(id) {
   return getAiNotes().find((n) => n.id === id) || null;
 }
 
-// The newest AI note for a topic, or null.
+// The newest AI note made from this topic's chat, or null.
 export function latestAiNote(topicId) {
-  return getAiNotes().find((n) => n.topic === topicId) || null;
+  return getAiNotes().find((n) => n.topic === topicId && n.source !== 'manual') || null;
+}
+
+// Titles match when they are the same apart from spaces, punctuation, and case.
+export function normalizeTitle(title) {
+  return String(title || '').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
+}
+
+export function aiNotesWithTitle(title) {
+  const key = normalizeTitle(title);
+  return key ? getAiNotes().filter((n) => normalizeTitle(n.card?.title) === key) : [];
+}
+
+export function notesWithTitle(title) {
+  const key = normalizeTitle(title);
+  return key ? getNotes().filter((n) => normalizeTitle(n.title) === key) : [];
 }
 
 export function addAiNote(note) {

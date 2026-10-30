@@ -1,6 +1,6 @@
 import { topics, generalTopic, getTopic } from './topics.js';
 import * as store from './store.js';
-import { PROVIDERS, claudeModels, geminiModels, hasApiKey, listGeminiModels, askTutor, checkNote, summarizeChat, friendlyError } from './ai.js';
+import { PROVIDERS, claudeModels, geminiModels, hasApiKey, listGeminiModels, askTutor, checkNote, summarizeChat, writeAiNote, friendlyError } from './ai.js';
 import { LANGUAGES, t, getLang, locale } from './i18n.js';
 import { drawCard } from './card.js';
 import { STYLE_IDS, LENGTH_IDS, styleInfo, lengthInfo, tutorSettings } from './tutor.js';
@@ -359,6 +359,140 @@ function openTutorSettings(onSaved) {
   dialog.showModal();
 }
 
+/* ---------- New AI note (written by the student's request) ---------- */
+function openAddAiNote(prefill = {}) {
+  const myNotes = store.getNotes().filter((n) => n.title);
+  const dialog = document.createElement('dialog');
+  dialog.className = 'sheet';
+  dialog.innerHTML = `
+    <div class="sheet-head">
+      <h3>${t('aiNotes.add')}</h3>
+      <button class="link" id="an-close">${t('summary.close')}</button>
+    </div>
+    <div class="sheet-body add-ai" id="an-body">
+      <p class="muted small">${t('aiNotes.addHelp')}</p>
+      ${myNotes.length ? `
+      <label>${t('aiNotes.fromNote')}
+        <select id="an-from">
+          <option value="">${t('aiNotes.fromNoteNone')}</option>
+          ${myNotes.map((n) => `<option value="${esc(n.id)}">${esc(n.title)}</option>`).join('')}
+        </select>
+      </label>` : ''}
+      <label>${t('note.topic')}
+        <select id="an-topic">
+          <option value="">${t('note.choose')}</option>
+          ${topicOptions(prefill.topic || '')}
+        </select>
+      </label>
+      <label>${t('note.title')}
+        <input id="an-title" maxlength="120" placeholder="${t('note.titlePh')}" value="${esc(prefill.title || '')}">
+      </label>
+      <label>${t('aiNotes.questions')}
+        <textarea id="an-questions" rows="4" placeholder="${t('aiNotes.questionsPh')}"></textarea>
+      </label>
+      <p class="muted small">${t('aiNotes.questionsHelp')}</p>
+    </div>
+    <div class="actions" id="an-actions">
+      <button class="btn block" id="an-go">${t('aiNotes.generate')}</button>
+    </div>`;
+  document.body.append(dialog);
+  const body = $('#an-body', dialog);
+  let ctrl = null;
+  const close = () => { ctrl?.abort(); dialog.close(); };
+  dialog.addEventListener('close', () => dialog.remove());
+  $('#an-close', dialog).onclick = close;
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
+
+  $('#an-from', dialog)?.addEventListener('change', (e) => {
+    const n = store.getNote(e.target.value);
+    if (!n) return;
+    $('#an-title', dialog).value = n.title;
+    if (n.topic) $('#an-topic', dialog).value = n.topic;
+  });
+
+  $('#an-go', dialog).onclick = async () => {
+    const topic = getTopic($('#an-topic', dialog).value);
+    const title = $('#an-title', dialog).value.trim();
+    let questions = $('#an-questions', dialog).value.split('\n').map((q) => q.trim()).filter(Boolean);
+    if (!topic) { toast(t('aiNotes.needTopic')); return; }
+    if (!title) { toast(t('aiNotes.needTitle')); return; }
+    if (!hasApiKey()) { close(); toast(t('toast.needKey')); location.hash = '#/settings'; return; }
+    if (questions.length > 8) { toast(t('aiNotes.tooMany')); questions = questions.slice(0, 8); }
+
+    const form = body.innerHTML;
+    const values = { from: $('#an-from', dialog)?.value, topic: topic.id, title, q: $('#an-questions', dialog).value };
+    $('#an-actions', dialog).hidden = true;
+    body.innerHTML = `<div class="loading"><span class="spinner"></span><p class="muted">${t('summary.making')}</p><p id="an-wait"></p></div>`;
+    ctrl = new AbortController();
+    const startedAt = Date.now();
+    const showWait = () => { const el = $('#an-wait', dialog); if (el) el.innerHTML = thinkingHtml(startedAt); };
+    showWait();
+    const tick = setInterval(showWait, 1000);
+    try {
+      const card = await writeAiNote({ topic, title, questions, signal: ctrl.signal });
+      const note = store.addAiNote({ topic: topic.id, card, at: Date.now(), lang: getLang(), source: 'manual' });
+      dialog.close();
+      toast(t('summary.saved'));
+      if (location.hash.startsWith('#/ai-notes')) aiNotesView();
+      openImageDialog({ topic, note });
+    } catch (err) {
+      if (!dialog.open) return;
+      // Show the error above the form, with what they typed kept.
+      body.innerHTML = `<p class="error">${esc(friendlyError(err))}</p>${form}`;
+      if (values.from && $('#an-from', dialog)) $('#an-from', dialog).value = values.from;
+      $('#an-topic', dialog).value = values.topic;
+      $('#an-title', dialog).value = values.title;
+      $('#an-questions', dialog).value = values.q;
+      $('#an-actions', dialog).hidden = false;
+    } finally {
+      clearInterval(tick);
+      ctrl = null;
+    }
+  };
+
+  dialog.showModal();
+}
+
+/* ---------- Compare my note with an AI note ---------- */
+function compareView(noteId, aiId) {
+  const note = store.getNote(noteId);
+  const ai = store.getAiNote(aiId);
+  setTitle(t('compare.title'), '#/notes');
+  setTab('notes');
+  if (!note || !ai) {
+    view.innerHTML = `<div class="empty"><p>⇄</p><p>${t('compare.missing')}</p></div>`;
+    return;
+  }
+  const topic = getTopic(ai.topic) || getTopic(note.topic) || generalTopic();
+  view.innerHTML = `
+    <section class="panel compare-head" style="--c:${topic.color}">
+      <p class="eyebrow">${topic.icon} ${esc(topic.name)}</p>
+      <h2>${esc(note.title)}</h2>
+      <p class="muted small">${t('compare.hint')}</p>
+    </section>
+    <div class="compare">
+      <section class="panel">
+        <div class="row">
+          <h3>${t('compare.mine')}</h3>
+          ${note.score ? `<b class="score">${esc(note.score)}</b>` : ''}
+        </div>
+        <div class="compare-text">${note.body ? esc(note.body).replace(/\n/g, '<br>') : `<span class="muted">${t('compare.empty')}</span>`}</div>
+        <p class="muted small">${fmtDate(note.updatedAt)}</p>
+        <a class="btn ghost small" href="#/note/${note.id}">${t('compare.edit')}</a>
+      </section>
+      <section class="panel">
+        <div class="row"><h3>${t('compare.ai')}</h3></div>
+        <ol class="compare-points">
+          ${ai.card.points.map((p) => `<li><strong>${esc(p.emoji)} ${esc(p.question)}</strong><span>${esc(p.answer)}</span></li>`).join('')}
+        </ol>
+        <p class="takeaway">💡 ${esc(ai.card.takeaway)}</p>
+        <p class="muted small">${fmtDate(ai.at)}</p>
+        <button class="btn ghost small" id="cmp-image">${t('compare.viewImage')}</button>
+      </section>
+    </div>`;
+  $('#cmp-image').onclick = () => openImageDialog({ topic, note: ai });
+}
+
 /* ---------- AI notes (summary images) ---------- */
 function cardCanvas(note, topic) {
   return drawCard(note.card, {
@@ -394,7 +528,8 @@ function openImageDialog({ topic, history, note: givenNote }) {
       ${fromChat
         ? `<button class="btn ghost" id="sum-redo">${t('summary.redo')}</button>`
         : `<button class="btn danger" id="sum-delete">${t('summary.delete')}</button>`}
-    </div>`;
+    </div>
+    <button class="btn ghost block" id="sum-compare" hidden>${t('compare.withNote')}</button>`;
   document.body.append(dialog);
   const body = $('#sum-body', dialog);
   const actions = $('#sum-actions', dialog);
@@ -414,6 +549,10 @@ function openImageDialog({ topic, history, note: givenNote }) {
     $('#sum-download', dialog).hidden = false;
     const file = new File([blob], fileName(), { type: 'image/png' });
     $('#sum-share', dialog).hidden = !(navigator.canShare && navigator.canShare({ files: [file] }));
+    const match = store.notesWithTitle(note.card.title)[0];
+    const cmp = $('#sum-compare', dialog);
+    cmp.hidden = !match;
+    if (match) cmp.onclick = () => { dialog.close(); location.hash = `#/compare/${match.id}/${note.id}`; };
   };
 
   const generate = async () => {
@@ -481,7 +620,9 @@ function aiNotesView() {
         ${topicOptions('')}
       </select>
     </div>
-    <div class="gallery" id="gallery"></div>`;
+    <div class="gallery" id="gallery"></div>
+    <button class="fab" id="add-ai" aria-label="${t('aiNotes.add')}">＋</button>`;
+  $('#add-ai').onclick = () => openAddAiNote({ topic: $('#ai-filter').value });
 
   const draw = () => {
     const f = $('#ai-filter').value;
@@ -499,6 +640,7 @@ function aiNotesView() {
           <span class="ai-note-text">
             <strong>${esc(n.card.title)}</strong>
             <small>${tp?.icon || ''} ${esc(tp?.name || '')} · ${t('aiNotes.count', { n: n.card.points.length })} · ${fmtDate(n.at)}</small>
+            ${store.notesWithTitle(n.card.title).length ? `<span class="badge">${t('compare.badge')}</span>` : ''}
           </span>
         </button>`;
     }).join('');
@@ -546,7 +688,7 @@ function noteItem(n) {
     <a class="note-item" href="#/note/${n.id}">
       <span class="dot" style="--c:${tp?.color || '#888'}">${tp?.icon || '📝'}</span>
       <span class="grow">
-        <strong>${esc(n.title || t('note.untitled'))}</strong>
+        <strong>${esc(n.title || t('note.untitled'))}${store.aiNotesWithTitle(n.title).length ? ` <span class="badge">${t('compare.badge')}</span>` : ''}</strong>
         <small>${esc((n.body || '').slice(0, 90))}</small>
       </span>
       <span class="meta">${n.score ? `<b>${esc(n.score)}</b>` : ''}<small>${fmtDate(n.updatedAt)}</small></span>
@@ -608,6 +750,7 @@ function noteEditView(id, params) {
       </div>
       ${existing ? `<p class="muted small">${t('note.lastSaved', { time: new Date(existing.updatedAt).toLocaleString(locale()) })}</p>` : ''}
     </form>
+    ${existing?.title ? matchPanel(existing) : ''}
     <section class="panel ${note.feedback ? '' : 'hidden'}" id="fb-panel">
       <h3>${t('note.feedback')}</h3>
       <div class="feedback" id="feedback">${note.feedback ? md(note.feedback) : ''}</div>
@@ -673,12 +816,21 @@ function noteEditView(id, params) {
     }
   };
 
+  $('#make-ai')?.addEventListener('click', () => openAddAiNote({ topic: note.topic, title: note.title }));
   $('#delete')?.addEventListener('click', () => {
     if (!confirm(t('note.confirmDelete'))) return;
     store.deleteNote(note.id);
     toast(t('toast.deleted'));
     location.hash = '#/notes';
   });
+}
+
+// Under a saved note: compare with a same-titled AI note, or make one.
+function matchPanel(note) {
+  const ai = store.aiNotesWithTitle(note.title)[0];
+  return ai
+    ? `<section class="panel match"><p>${t('note.matchFound')}</p><a class="btn block" href="#/compare/${note.id}/${ai.id}">${t('compare.withAi')}</a></section>`
+    : `<section class="panel match"><p class="muted small">${t('note.makeAiHelp')}</p><button class="btn ghost block" id="make-ai" type="button">${t('note.makeAi')}</button></section>`;
 }
 
 function settingsView() {
@@ -826,6 +978,7 @@ function route() {
   else if (parts[0] === 'notes') notesView();
   else if (parts[0] === 'note' && parts[1]) noteEditView(parts[1], params);
   else if (parts[0] === 'ai-notes') aiNotesView();
+  else if (parts[0] === 'compare' && parts[2]) compareView(parts[1], parts[2]);
   else if (parts[0] === 'settings') settingsView();
   else homeView();
   window.scrollTo(0, 0);

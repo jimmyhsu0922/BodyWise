@@ -313,10 +313,39 @@ Create the summary card content as JSON with these fields:
   - "answer": a direct answer to exactly what the student asked, built from the conversation, accurate and specific (${zh ? '最多 60 個字' : 'at most 35 words'}).
 - "takeaway": the single most important idea to remember, ${zh ? '最多 30 個字' : 'at most 18 words'}.
 Use plain text only (no Markdown). Base everything on the conversation; correct the tutor's wording only if it was scientifically wrong.`;
-  const { text, truncated } = await streamReply({ system, messages: [{ role: 'user', content: prompt }], signal, schema: SUMMARY_SCHEMA });
+  return finishCard(await streamReply({ system, messages: [{ role: 'user', content: prompt }], signal, schema: SUMMARY_SCHEMA }), 6);
+}
+
+function finishCard({ text, truncated }, maxPoints) {
   if (truncated) throw new Error(t('err.summaryTooLong'));
   const card = parseJson(text);
   if (!Array.isArray(card.points) || !card.points.length) throw new Error(t('err.summaryParse'));
-  card.points = card.points.slice(0, 6);
+  card.points = card.points.slice(0, maxPoints);
+  return card;
+}
+
+// An AI note the student asks for directly: a title (often the same as one
+// of their own notes, so they can compare) and optional questions.
+export async function writeAiNote({ topic, title, questions, signal }) {
+  const zh = getLang() === 'zh-Hant';
+  const system = `You write the text for a one-glance study summary card (an infographic image) about the human body. The student will compare it with their own notes, so be accurate, specific, and cover what matters most. Write everything in ${replyLanguage()}.`;
+  const asked = questions.length
+    ? `The student's questions, in order:\n${questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
+    : 'The student did not list any questions.';
+  const prompt = `Topic: ${topic.name}
+Card title: ${title}
+${asked}
+
+Create the card content as JSON with these fields:
+- "title": exactly "${title}" (copy it unchanged).
+- "subtitle": one sentence saying what the card covers, ${zh ? '最多 30 個字' : 'at most 18 words'}.
+- "points": ${questions.length ? 'one item for each question above, in the same order' : 'the 3 to 5 most important things a student should know about this title, each phrased as a question'}. Each has:
+  - "emoji": one emoji that represents the point,
+  - "question": the question, short and clear (${zh ? '最多 20 個字' : 'at most 12 words'}),
+  - "answer": a direct, accurate answer (${zh ? '最多 60 個字' : 'at most 35 words'}).
+- "takeaway": the single most important idea to remember, ${zh ? '最多 30 個字' : 'at most 18 words'}.
+Use plain text only (no Markdown).`;
+  const card = finishCard(await streamReply({ system, messages: [{ role: 'user', content: prompt }], signal, schema: SUMMARY_SCHEMA }), 8);
+  card.title = title; // keep it identical so it matches the student's note
   return card;
 }
