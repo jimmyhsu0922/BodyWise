@@ -60,7 +60,7 @@ How to teach:
 }
 
 /* ---------- Claude ---------- */
-async function streamClaude({ system, messages, onText, signal }) {
+async function streamClaude({ system, messages, onText, signal, schema }) {
   const { apiKey, model } = getSettings();
   if (!apiKey) throw new Error(t('err.needClaudeKey'));
   const params = {
@@ -70,6 +70,7 @@ async function streamClaude({ system, messages, onText, signal }) {
     system,
     messages,
   };
+  if (schema) params.output_config.format = { type: 'json_schema', schema };
   // If a safety check declines a request, let the API retry it on a suitable
   // fallback model automatically (not available for Haiku).
   if (model !== 'claude-haiku-5-5') {
@@ -104,7 +105,7 @@ async function geminiFailure(res) {
   return new GeminiError(t('err.api', { detail: detail || res.statusText || res.status }));
 }
 
-async function streamGemini({ system, messages, onText, signal }) {
+async function streamGemini({ system, messages, onText, signal, schema }) {
   const { geminiKey, geminiModel } = getSettings();
   if (!geminiKey) throw new Error(t('err.needGeminiKey'));
   let res;
@@ -116,7 +117,7 @@ async function streamGemini({ system, messages, onText, signal }) {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
-        generationConfig: { maxOutputTokens: 8000 },
+        generationConfig: { maxOutputTokens: 8000, ...(schema && { responseMimeType: 'application/json' }) },
       }),
     });
   } catch (err) {
@@ -208,4 +209,68 @@ ${note.body}
 
 ${format}`;
   return streamReply({ system, messages: [{ role: 'user', content: prompt }], onText, signal });
+}
+
+/* ---------- Summary card ---------- */
+const SUMMARY_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    subtitle: { type: 'string' },
+    points: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          emoji: { type: 'string' },
+          question: { type: 'string' },
+          answer: { type: 'string' },
+        },
+        required: ['emoji', 'question', 'answer'],
+        additionalProperties: false,
+      },
+    },
+    takeaway: { type: 'string' },
+  },
+  required: ['title', 'subtitle', 'points', 'takeaway'],
+  additionalProperties: false,
+};
+
+function parseJson(text) {
+  try { return JSON.parse(text); } catch { /* fall through */ }
+  const m = text.match(/\{[\s\S]*\}/);
+  if (m) { try { return JSON.parse(m[0]); } catch { /* fall through */ } }
+  throw new Error(t('err.summaryParse'));
+}
+
+// Turns the chat into the content of a one-glance summary image: one point
+// per key thing the student asked about.
+export async function summarizeChat({ topic, history, signal }) {
+  const zh = getLang() === 'zh-Hant';
+  const transcript = history
+    .map((m) => `${m.role === 'user' ? 'STUDENT' : 'TUTOR'}: ${m.content}`)
+    .join('\n\n')
+    .slice(-24000);
+  const system = `You turn a student's study conversation about the human body into the text for a one-glance summary card (an infographic image) that someone who did not see the chat can understand immediately. Write everything in ${replyLanguage()}.`;
+  const prompt = `Topic: ${topic.name}
+
+Conversation:
+"""
+${transcript}
+"""
+
+Create the summary card content as JSON with these fields:
+- "title": what the student was learning about, ${zh ? '最多 16 個字' : 'at most 8 words'}.
+- "subtitle": one sentence saying what the questions were about, ${zh ? '最多 30 個字' : 'at most 18 words'}.
+- "points": one item for each key question the student asked, in the order asked, merging repeats; 2 to 6 items. Each has:
+  - "emoji": one emoji that represents the point,
+  - "question": the key thing they asked, rewritten as a short, clear question (${zh ? '最多 20 個字' : 'at most 12 words'}),
+  - "answer": the core answer from the conversation, accurate and specific (${zh ? '最多 60 個字' : 'at most 35 words'}).
+- "takeaway": the single most important idea to remember, ${zh ? '最多 30 個字' : 'at most 18 words'}.
+Use plain text only (no Markdown). Base everything on the conversation; correct the tutor's wording only if it was scientifically wrong.`;
+  const text = await streamReply({ system, messages: [{ role: 'user', content: prompt }], signal, schema: SUMMARY_SCHEMA });
+  const card = parseJson(text);
+  if (!Array.isArray(card.points) || !card.points.length) throw new Error(t('err.summaryParse'));
+  card.points = card.points.slice(0, 6);
+  return card;
 }

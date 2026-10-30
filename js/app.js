@@ -1,7 +1,8 @@
 import { topics, generalTopic, getTopic } from './topics.js';
 import * as store from './store.js';
-import { PROVIDERS, claudeModels, geminiModels, hasApiKey, listGeminiModels, askTutor, checkNote, friendlyError } from './ai.js';
+import { PROVIDERS, claudeModels, geminiModels, hasApiKey, listGeminiModels, askTutor, checkNote, summarizeChat, friendlyError } from './ai.js';
 import { LANGUAGES, t, getLang, locale } from './i18n.js';
+import { drawCard } from './card.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
@@ -140,6 +141,7 @@ function topicView(id) {
         <h3>${t('topic.tutor')}</h3>
         <button class="link" id="clear-chat">${t('topic.clearChat')}</button>
       </div>
+      <button class="btn ghost small block summary-btn" id="summary">${t('summary.button')}</button>
       <div class="chat" id="chat"></div>
       <div class="quick">
         ${t(isGeneral ? 'topic.quickGeneral' : 'topic.quick')
@@ -240,11 +242,110 @@ function topicView(id) {
     store.saveChat(topic.id, messages);
     render();
   };
+  $('#summary').onclick = () => {
+    if (activeRequest) return;
+    if (!messages.some((m) => m.role === 'user' && !m.error)) { toast(t('summary.needChat')); return; }
+    openSummary(topic, apiHistory(messages));
+  };
   $('#done')?.addEventListener('click', () => {
     const now = store.toggleDone(topic.id);
     toast(t(now ? 'toast.markedDone' : 'toast.unmarked'));
     topicView(id);
   });
+}
+
+/* ---------- Summary image ---------- */
+// Shows the saved summary image for this topic if the chat hasn't changed
+// since it was made; otherwise asks the AI for a new one.
+function openSummary(topic, history) {
+  const saved = store.getSummary(topic.id);
+  const upToDate = saved && saved.chatLength === history.length && saved.lang === getLang();
+
+  const dialog = document.createElement('dialog');
+  dialog.className = 'sheet';
+  dialog.innerHTML = `
+    <div class="sheet-head">
+      <h3>${t('summary.title')}</h3>
+      <button class="link" id="sum-close">${t('summary.close')}</button>
+    </div>
+    <div class="sheet-body" id="sum-body"></div>
+    <div class="actions" id="sum-actions" hidden>
+      <button class="btn" id="sum-download">${t('summary.download')}</button>
+      <button class="btn ghost" id="sum-share" hidden>${t('summary.share')}</button>
+      <button class="btn ghost" id="sum-redo">${t('summary.redo')}</button>
+    </div>`;
+  document.body.append(dialog);
+  const body = $('#sum-body', dialog);
+  const actions = $('#sum-actions', dialog);
+  let ctrl = null;
+  let blob = null;
+  const fileName = () => `body-study-${topic.id}-${new Date().toISOString().slice(0, 10)}.png`;
+
+  const close = () => { ctrl?.abort(); dialog.close(); };
+  dialog.addEventListener('close', () => dialog.remove());
+  $('#sum-close', dialog).onclick = close;
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
+
+  const show = async (summary, note = '') => {
+    const canvas = drawCard(summary.card, {
+      color: topic.color,
+      icon: topic.icon,
+      topicName: topic.name,
+      takeawayLabel: t('summary.takeaway'),
+      footer: t('summary.footer'),
+      date: new Date(summary.at).toLocaleDateString(locale()),
+    });
+    blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+    const url = URL.createObjectURL(blob);
+    body.innerHTML = `${note ? `<p class="muted small">${note}</p>` : ''}<img class="summary-img" alt="${esc(t('summary.alt', { topic: topic.name }))}" src="${url}">`;
+    actions.hidden = false;
+    const file = new File([blob], fileName(), { type: 'image/png' });
+    $('#sum-share', dialog).hidden = !(navigator.canShare && navigator.canShare({ files: [file] }));
+  };
+
+  const generate = async () => {
+    if (!hasApiKey()) { close(); toast(t('toast.needKey')); location.hash = '#/settings'; return; }
+    actions.hidden = true;
+    body.innerHTML = `<div class="loading"><span class="spinner"></span><p class="muted">${t('summary.making')}</p></div>`;
+    ctrl = new AbortController();
+    try {
+      const card = await summarizeChat({ topic, history, signal: ctrl.signal });
+      const summary = { card, at: Date.now(), chatLength: history.length, lang: getLang() };
+      store.saveSummary(topic.id, summary);
+      await show(summary);
+    } catch (err) {
+      if (!dialog.open) return;
+      body.innerHTML = `<p class="error">${esc(friendlyError(err))}</p>`;
+      actions.hidden = false;
+      $('#sum-download', dialog).hidden = true;
+      $('#sum-share', dialog).hidden = true;
+    } finally {
+      ctrl = null;
+    }
+  };
+
+  $('#sum-download', dialog).onclick = () => {
+    if (!blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fileName();
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  $('#sum-share', dialog).onclick = async () => {
+    try {
+      await navigator.share({ files: [new File([blob], fileName(), { type: 'image/png' })], title: topic.name });
+    } catch { /* cancelled */ }
+  };
+  $('#sum-redo', dialog).onclick = () => {
+    $('#sum-download', dialog).hidden = false;
+    generate();
+  };
+
+  dialog.showModal();
+  if (saved && upToDate) show(saved);
+  else if (saved && saved.lang === getLang()) show(saved, t('summary.outdated'));
+  else generate();
 }
 
 // The last turns of the chat, minus failed questions, in user/assistant order.
@@ -538,6 +639,7 @@ function settingsView() {
 /* ---------- Router ---------- */
 function route() {
   stopRequest();
+  document.querySelectorAll('dialog[open]').forEach((d) => d.close());
   const [path, query = ''] = location.hash.replace(/^#/, '').split('?');
   const parts = path.split('/').filter(Boolean);
   const params = new URLSearchParams(query);

@@ -5,6 +5,7 @@ const KEYS = {
   chats: 'bs.chats',
   settings: 'bs.settings',
   done: 'bs.done',
+  summaries: 'bs.summaries',
 };
 
 function read(key, fallback) {
@@ -85,6 +86,17 @@ export function saveChat(topicId, messages) {
   write(KEYS.chats, chats);
 }
 
+/* ---------- Summary images (the card text, per topic) ---------- */
+export function getSummary(topicId) {
+  return read(KEYS.summaries, {})[topicId] || null;
+}
+
+export function saveSummary(topicId, summary) {
+  const all = read(KEYS.summaries, {});
+  all[topicId] = summary;
+  write(KEYS.summaries, all);
+}
+
 /* ---------- Topics marked as learned ---------- */
 export function getDone() {
   return read(KEYS.done, []);
@@ -105,6 +117,7 @@ export function exportData() {
     exportedAt: new Date().toISOString(),
     notes: read(KEYS.notes, []),
     chats: read(KEYS.chats, {}),
+    summaries: read(KEYS.summaries, {}),
     done: getDone(),
   }, null, 2);
 }
@@ -120,6 +133,7 @@ export function importData(text) {
   }
   write(KEYS.notes, [...byId.values()]);
   write(KEYS.chats, { ...data.chats, ...read(KEYS.chats, {}) });
+  write(KEYS.summaries, { ...data.summaries, ...read(KEYS.summaries, {}) });
   write(KEYS.done, [...new Set([...getDone(), ...(data.done || [])])]);
   return data.notes.length;
 }
