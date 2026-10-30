@@ -460,7 +460,10 @@ function noteEditView(id, params) {
 
   $('#form').onsubmit = (e) => {
     e.preventDefault();
-    if (persist()) toast(t('toast.saved'));
+    if (!persist()) return;
+    toast(t('toast.saved'));
+    // Back to the notes list; replace so Back doesn't reopen the editor.
+    location.replace('#/notes');
   };
 
   $('#check').onclick = async () => {
