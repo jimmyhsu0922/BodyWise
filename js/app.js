@@ -1,6 +1,6 @@
 import { TOPICS, GENERAL, getTopic } from './topics.js';
 import * as store from './store.js';
-import { MODELS, hasApiKey, askTutor, checkNote, friendlyError } from './ai.js';
+import { PROVIDERS, MODELS, GEMINI_MODELS, hasApiKey, listGeminiModels, askTutor, checkNote, friendlyError } from './ai.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
@@ -83,7 +83,7 @@ function homeView() {
       </div>
       <div class="ring" style="--p:${(done.length / TOPICS.length) * 100}"></div>
     </section>
-    ${hasApiKey() ? '' : `<a class="banner" href="#/settings">🔑 Add your Claude API key in Settings to turn on the AI tutor.</a>`}
+    ${hasApiKey() ? '' : `<a class="banner" href="#/settings">🔑 Add a Claude or Gemini API key in Settings to turn on the AI tutor.</a>`}
     <a class="card wide" href="#/topic/general" style="--c:${GENERAL.color}">
       <span class="icon">${GENERAL.icon}</span>
       <span><strong>${GENERAL.name}</strong><small>Chat with your AI tutor about anything</small></span>
@@ -394,13 +394,32 @@ function settingsView() {
   view.innerHTML = `
     <section class="panel">
       <h3>🤖 AI tutor</h3>
-      <label>Claude API key
-        <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(s.apiKey)}">
+      <label>AI provider
+        <select id="provider">${PROVIDERS.map((p) => `<option value="${p.id}" ${p.id === s.provider ? 'selected' : ''}>${p.label}</option>`).join('')}</select>
       </label>
-      <p class="muted small">Get a key at <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>. It is saved only on this device and sent only to Anthropic. Usage is billed to your Anthropic account.</p>
-      <label>Model
-        <select id="model">${MODELS.map((m) => `<option value="${m.id}" ${m.id === s.model ? 'selected' : ''}>${m.label}</option>`).join('')}</select>
-      </label>
+
+      <div id="claude-fields">
+        <label>Claude API key
+          <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(s.apiKey)}">
+        </label>
+        <p class="muted small">Get a key at <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>. Usage is billed to your Anthropic account.</p>
+        <label>Model
+          <select id="model">${MODELS.map((m) => `<option value="${m.id}" ${m.id === s.model ? 'selected' : ''}>${m.label}</option>`).join('')}</select>
+        </label>
+      </div>
+
+      <div id="gemini-fields">
+        <label>Gemini API key
+          <input id="gkey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…" value="${esc(s.geminiKey)}">
+        </label>
+        <p class="muted small">Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>. Gemini has a free tier with usage limits.</p>
+        <label>Model
+          <select id="gmodel"></select>
+        </label>
+        <button class="link" id="load-models" type="button">Load all models for my key</button>
+      </div>
+
+      <p class="muted small">Keys are saved only on this device and sent only to the provider you choose.</p>
       <button class="btn block" id="save">Save</button>
     </section>
 
@@ -420,8 +439,40 @@ function settingsView() {
       <b>iPhone (Safari):</b> Share button → <i>Add to Home Screen</i>.</p>
     </section>`;
 
+  const providerSel = $('#provider');
+  const showProvider = () => {
+    $('#claude-fields').hidden = providerSel.value !== 'claude';
+    $('#gemini-fields').hidden = providerSel.value !== 'gemini';
+  };
+  providerSel.onchange = showProvider;
+  showProvider();
+
+  const fillGeminiModels = (models) => {
+    if (!models.some((m) => m.id === s.geminiModel)) models = [{ id: s.geminiModel, label: s.geminiModel }, ...models];
+    $('#gmodel').innerHTML = models.map((m) => `<option value="${esc(m.id)}" ${m.id === s.geminiModel ? 'selected' : ''}>${esc(m.label)}</option>`).join('');
+  };
+  fillGeminiModels(GEMINI_MODELS);
+  $('#load-models').onclick = async () => {
+    const key = $('#gkey').value.trim();
+    if (!key) { toast('Enter your Gemini API key first'); return; }
+    try {
+      const models = await listGeminiModels(key);
+      s.geminiModel = $('#gmodel').value;
+      fillGeminiModels([...GEMINI_MODELS, ...models]);
+      toast(`Loaded ${models.length} models`);
+    } catch (err) {
+      toast(friendlyError(err));
+    }
+  };
+
   $('#save').onclick = () => {
-    store.saveSettings({ apiKey: $('#key').value.trim(), model: $('#model').value });
+    store.saveSettings({
+      provider: providerSel.value,
+      apiKey: $('#key').value.trim(),
+      model: $('#model').value,
+      geminiKey: $('#gkey').value.trim(),
+      geminiModel: $('#gmodel').value,
+    });
     toast('Settings saved ✓');
   };
   $('#export').onclick = () => {

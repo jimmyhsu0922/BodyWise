@@ -31,7 +31,13 @@ export function requestPersistence() {
 }
 
 /* ---------- Settings ---------- */
-const DEFAULT_SETTINGS = { apiKey: '', model: 'claude-opus-5-5' };
+const DEFAULT_SETTINGS = {
+  provider: 'claude',
+  apiKey: '', // Claude key
+  model: 'claude-opus-5-5',
+  geminiKey: '',
+  geminiModel: 'gemini-flash-latest',
+};
 
 export function getSettings() {
   return { ...DEFAULT_SETTINGS, ...read(KEYS.settings, {}) };

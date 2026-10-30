@@ -3,7 +3,7 @@
 A phone-installable web app (PWA) for learning the human body.
 
 - **Learn** — 12 body-system topics with an overview, key parts and facts, plus "Ask Anything".
-- **AI Tutor** — chat with Claude about each topic; it can explain, give examples, and quiz you. It also reads your notes for that topic, so it can correct mistakes.
+- **AI Tutor** — chat with Claude or Gemini about each topic; it can explain, give examples, and quiz you. It also reads your notes for that topic, so it can correct mistakes.
 - **What I learned** — write what you understand in your own words. Notes are saved on your phone. Tap **Check my understanding** and the AI marks what's right, what to fix, what's missing, and gives a score.
 - **Backup** — download or restore your notes as a JSON file (Settings).
 
@@ -28,10 +28,12 @@ Then open the address on your phone:
 
 ## Turn on the AI
 
-1. Create an API key at https://platform.claude.com/settings/keys (usage is billed to your Anthropic account).
-2. In the app: **Settings → Claude API key → Save**.
+The tutor works with **Claude** or **Gemini** — pick one in **Settings → AI provider**.
 
-The key is stored only on your device and sent only to Anthropic. Don't share a copy of the app that has your key in it.
+- **Claude:** create a key at https://platform.claude.com/settings/keys (billed to your Anthropic account), then paste it in **Claude API key**.
+- **Gemini:** create a key at https://aistudio.google.com/apikey (has a free tier with limits), then paste it in **Gemini API key**. Tap **Load all models for my key** to choose any Gemini model your key can use.
+
+Keys are stored only on your device and sent only to the provider you pick. Don't share a copy of the app that has your key in it.
 
 ## Where your data lives
 
