@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Body Study</title>
+  <meta name="description" content="Learn the human body with an AI tutor and keep notes of what you know.">
+  <meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#11141c" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Body Study">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button id="back" class="back" aria-label="Back" hidden>‹</button>
+    <h1 id="title">Body Study</h1>
+  </header>
+
+  <main id="view"></main>
+
+  <nav class="tabbar">
+    <a href="#/" data-tab="learn"><span>🫀</span>Learn</a>
+    <a href="#/notes" data-tab="notes"><span>📝</span>Notes</a>
+    <a href="#/settings" data-tab="settings"><span>⚙️</span>Settings</a>
+  </nav>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
