@@ -32,6 +32,7 @@ export function requestPersistence() {
 
 /* ---------- Settings ---------- */
 const DEFAULT_SETTINGS = {
+  lang: '', // '' = follow the phone's language
   provider: 'claude',
   apiKey: '', // Claude key
   model: 'claude-opus-5-5',
@@ -110,7 +111,7 @@ export function exportData() {
 
 export function importData(text) {
   const data = JSON.parse(text);
-  if (data.app !== 'body-study' || !Array.isArray(data.notes)) throw new Error('This is not a Body Study backup file.');
+  if (data.app !== 'body-study' || !Array.isArray(data.notes)) throw new Error('not-backup');
   // Merge notes by id so importing never loses notes already on this device.
   const byId = new Map(read(KEYS.notes, []).map((n) => [n.id, n]));
   for (const n of data.notes) {

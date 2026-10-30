@@ -3,30 +3,39 @@
 // phone to the chosen provider.
 import Anthropic from 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.135.0/+esm';
 import { getSettings } from './store.js';
+import { t, getLang } from './i18n.js';
 
 export const PROVIDERS = [
   { id: 'claude', label: 'Claude (Anthropic)' },
   { id: 'gemini', label: 'Gemini (Google)' },
 ];
 
-export const MODELS = [
-  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 — best explanations' },
-  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 — faster, cheaper' },
-  { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5 — fastest, cheapest' },
-];
+export function claudeModels() {
+  return [
+    { id: 'claude-opus-5-5', label: t('model.opus') },
+    { id: 'claude-sonnet-5-5', label: t('model.sonnet') },
+    { id: 'claude-haiku-5-5', label: t('model.haiku') },
+  ];
+}
 
 // Aliases Google keeps pointing at its newest models; the full list can be
 // loaded from Settings with the user's key.
-export const GEMINI_MODELS = [
-  { id: 'gemini-flash-latest', label: 'Gemini Flash (latest) — fast, has a free tier' },
-  { id: 'gemini-pro-latest', label: 'Gemini Pro (latest) — best explanations' },
-];
+export function geminiModels() {
+  return [
+    { id: 'gemini-flash-latest', label: t('model.geminiFlash') },
+    { id: 'gemini-pro-latest', label: t('model.geminiPro') },
+  ];
+}
 
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
 
 export function hasApiKey() {
   const s = getSettings();
   return Boolean(s.provider === 'gemini' ? s.geminiKey : s.apiKey);
+}
+
+function replyLanguage() {
+  return getLang() === 'zh-Hant' ? 'Traditional Chinese (繁體中文, as used in Taiwan)' : 'English';
 }
 
 function tutorSystem(topic, notes) {
@@ -46,14 +55,14 @@ How to teach:
 - When it helps, end with one short question that checks understanding.
 - If the student's notes contain a mistake that is relevant, gently correct it.
 - When asked to quiz, ask one question at a time and wait for the answer.
-- Reply in the same language the student writes in.
+- Reply in ${replyLanguage()}, unless the student writes in a different language — then reply in theirs.
 - This is for learning, not diagnosis: if the student describes their own symptoms, give general information and suggest seeing a doctor or nurse.`;
 }
 
 /* ---------- Claude ---------- */
 async function streamClaude({ system, messages, onText, signal }) {
   const { apiKey, model } = getSettings();
-  if (!apiKey) throw new Error('Add your Claude API key in Settings first.');
+  if (!apiKey) throw new Error(t('err.needClaudeKey'));
   const params = {
     model,
     max_tokens: 8000,
@@ -77,7 +86,7 @@ async function streamClaude({ system, messages, onText, signal }) {
   });
   const message = await stream.finalMessage();
   if (message.stop_reason === 'refusal') {
-    throw new Error('The AI could not answer that request. Try rephrasing your question.');
+    throw new Error(t('err.refusal'));
   }
   return text;
 }
@@ -88,16 +97,16 @@ class GeminiError extends Error {}
 async function geminiFailure(res) {
   let detail = '';
   try { detail = (await res.json()).error?.message || ''; } catch { /* not JSON */ }
-  if (res.status === 400 && /api key/i.test(detail)) return new GeminiError('Your Gemini API key was rejected. Check it in Settings.');
-  if (res.status === 403) return new GeminiError('This Gemini API key is not allowed to do that. Check the key in Settings.');
-  if (res.status === 404) return new GeminiError('That Gemini model was not found. Pick another model in Settings.');
-  if (res.status === 429) return new GeminiError('Gemini usage limit reached — wait a moment and try again.');
-  return new GeminiError(`AI error: ${detail || res.statusText || res.status}`);
+  if (res.status === 400 && /api key/i.test(detail)) return new GeminiError(t('err.geminiAuth'));
+  if (res.status === 403) return new GeminiError(t('err.geminiPermission'));
+  if (res.status === 404) return new GeminiError(t('err.geminiModel'));
+  if (res.status === 429) return new GeminiError(t('err.geminiLimit'));
+  return new GeminiError(t('err.api', { detail: detail || res.statusText || res.status }));
 }
 
 async function streamGemini({ system, messages, onText, signal }) {
   const { geminiKey, geminiModel } = getSettings();
-  if (!geminiKey) throw new Error('Add your Gemini API key in Settings first.');
+  if (!geminiKey) throw new Error(t('err.needGeminiKey'));
   let res;
   try {
     res = await fetch(`${GEMINI_API}/models/${encodeURIComponent(geminiModel)}:streamGenerateContent?alt=sse`, {
@@ -112,7 +121,7 @@ async function streamGemini({ system, messages, onText, signal }) {
     });
   } catch (err) {
     if (err.name === 'AbortError') throw err;
-    throw new GeminiError('Could not reach the AI. Check your internet connection.');
+    throw new GeminiError(t('err.connection'));
   }
   if (!res.ok) throw await geminiFailure(res);
 
@@ -139,7 +148,7 @@ async function streamGemini({ system, messages, onText, signal }) {
       onText?.(text);
     }
   }
-  if (!text && blocked) throw new GeminiError('The AI could not answer that request. Try rephrasing your question.');
+  if (!text && blocked) throw new GeminiError(t('err.refusal'));
   return text;
 }
 
@@ -159,14 +168,14 @@ function streamReply(args) {
 }
 
 export function friendlyError(err) {
-  if (err?.name === 'AbortError' || err instanceof Anthropic.APIUserAbortError) return 'Stopped.';
+  if (err?.name === 'AbortError' || err instanceof Anthropic.APIUserAbortError) return t('err.stopped');
   if (err instanceof GeminiError) return err.message;
-  if (err instanceof Anthropic.AuthenticationError) return 'Your API key was rejected. Check it in Settings.';
-  if (err instanceof Anthropic.PermissionDeniedError) return 'This API key is not allowed to use that model. Try another model in Settings.';
-  if (err instanceof Anthropic.RateLimitError) return 'Too many requests right now — wait a moment and try again.';
-  if (err instanceof Anthropic.APIConnectionError) return 'Could not reach the AI. Check your internet connection.';
-  if (err instanceof Anthropic.APIError) return `AI error: ${err.message}`;
-  return err?.message || 'Something went wrong.';
+  if (err instanceof Anthropic.AuthenticationError) return t('err.claudeAuth');
+  if (err instanceof Anthropic.PermissionDeniedError) return t('err.claudePermission');
+  if (err instanceof Anthropic.RateLimitError) return t('err.rateLimit');
+  if (err instanceof Anthropic.APIConnectionError) return t('err.connection');
+  if (err instanceof Anthropic.APIError) return t('err.api', { detail: err.message });
+  return err?.message || t('err.unknown');
 }
 
 export function askTutor({ topic, notes, history, onText, signal }) {
@@ -174,7 +183,21 @@ export function askTutor({ topic, notes, history, onText, signal }) {
 }
 
 export function checkNote({ topic, note, onText, signal }) {
-  const system = `You are a supportive biology teacher reviewing a student's study note about the human body. The student wrote it from memory after studying, to check their understanding. Reply in the same language as the note.`;
+  const zh = getLang() === 'zh-Hant';
+  const system = `You are a supportive biology teacher reviewing a student's study note about the human body. The student wrote it from memory after studying, to check their understanding. Write your feedback in ${replyLanguage()}.`;
+  const format = zh
+    ? `請用這個格式回饋：
+**✅ 正確的地方** — 簡短條列。
+**⚠️ 需要修正** — 列出錯誤或迷思概念，並寫出正確說法。如果沒有，就寫「沒有，做得很好！」
+**➕ 可以補充** — 1～3 個漏掉的重要重點。
+**分數：** X/10（依正確性與完整度），加上一句鼓勵的話。
+請保持簡潔。`
+    : `Give feedback in this format:
+**✅ What you got right** — short bullet points.
+**⚠️ Needs fixing** — any mistakes or misconceptions, with the correct version. Say "Nothing — well done!" if there are none.
+**➕ Worth adding** — 1–3 important points they missed.
+**Score:** X/10 for accuracy and completeness, with one encouraging sentence.
+Keep it concise.`;
   const prompt = `Topic: ${topic ? topic.name : 'General'}
 Note title: ${note.title || '(untitled)'}
 
@@ -183,11 +206,6 @@ Student's note:
 ${note.body}
 """
 
-Give feedback in this format:
-**✅ What you got right** — short bullet points.
-**⚠️ Needs fixing** — any mistakes or misconceptions, with the correct version. Say "Nothing — well done!" if there are none.
-**➕ Worth adding** — 1–3 important points they missed.
-**Score:** X/10 for accuracy and completeness, with one encouraging sentence.
-Keep it concise.`;
+${format}`;
   return streamReply({ system, messages: [{ role: 'user', content: prompt }], onText, signal });
 }

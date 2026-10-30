@@ -6,6 +6,7 @@ A phone-installable web app (PWA) for learning the human body.
 - **AI Tutor** — chat with Claude or Gemini about each topic; it can explain, give examples, and quiz you. It also reads your notes for that topic, so it can correct mistakes.
 - **What I learned** — write what you understand in your own words. Notes are saved on your phone. Tap **Check my understanding** and the AI marks what's right, what to fix, what's missing, and gives a score.
 - **Backup** — download or restore your notes as a JSON file (Settings).
+- **Language** — English or 繁體中文 (Settings → Language). The topics, screens, and AI replies all follow the chosen language. The first time it opens, the app picks the phone's language.
 
 Plain HTML/CSS/JS, no build step.
 

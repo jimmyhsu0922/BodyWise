@@ -1,6 +1,7 @@
-import { TOPICS, GENERAL, getTopic } from './topics.js';
+import { topics, generalTopic, getTopic } from './topics.js';
 import * as store from './store.js';
-import { PROVIDERS, MODELS, GEMINI_MODELS, hasApiKey, listGeminiModels, askTutor, checkNote, friendlyError } from './ai.js';
+import { PROVIDERS, claudeModels, geminiModels, hasApiKey, listGeminiModels, askTutor, checkNote, friendlyError } from './ai.js';
+import { LANGUAGES, t, getLang, locale } from './i18n.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
@@ -41,15 +42,15 @@ function md(text) {
 }
 
 function fmtDate(ts) {
-  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return new Date(ts).toLocaleDateString(locale(), { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function toast(msg) {
-  const t = $('#toast');
-  t.textContent = msg;
-  t.classList.add('show');
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.add('show');
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => t.classList.remove('show'), 2200);
+  toast.timer = setTimeout(() => el.classList.remove('show'), 2200);
 }
 
 function setTitle(title, back) {
@@ -63,38 +64,53 @@ function setTab(tab) {
   document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
 }
 
+// Text that lives in index.html rather than in a view.
+function applyLanguage() {
+  document.documentElement.lang = getLang();
+  document.querySelectorAll('[data-i18n]').forEach((el) => (el.textContent = t(el.dataset.i18n)));
+  $('#back').setAttribute('aria-label', t('nav.back'));
+}
+
 function stopRequest() {
   activeRequest?.abort();
   activeRequest = null;
+}
+
+function topicOptions(selected) {
+  return [generalTopic(), ...topics()]
+    .map((tp) => `<option value="${tp.id}" ${tp.id === selected ? 'selected' : ''}>${tp.icon} ${esc(tp.name)}</option>`)
+    .join('');
 }
 
 /* ---------- Views ---------- */
 function homeView() {
   setTitle('Body Study');
   setTab('learn');
+  const all = topics();
+  const general = generalTopic();
   const done = store.getDone();
   const notes = store.getNotes();
   view.innerHTML = `
     <section class="hero">
       <div>
-        <p class="eyebrow">Your progress</p>
-        <p class="big">${done.length}<span>/${TOPICS.length} topics learned</span></p>
-        <p class="muted">${notes.length} note${notes.length === 1 ? '' : 's'} written</p>
+        <p class="eyebrow">${t('home.progress')}</p>
+        <p class="big">${done.length}<span>${t('home.topicsLearned', { total: all.length })}</span></p>
+        <p class="muted">${t('home.notesWritten', { n: notes.length })}</p>
       </div>
-      <div class="ring" style="--p:${(done.length / TOPICS.length) * 100}"></div>
+      <div class="ring" style="--p:${(done.length / all.length) * 100}"></div>
     </section>
-    ${hasApiKey() ? '' : `<a class="banner" href="#/settings">🔑 Add a Claude or Gemini API key in Settings to turn on the AI tutor.</a>`}
-    <a class="card wide" href="#/topic/general" style="--c:${GENERAL.color}">
-      <span class="icon">${GENERAL.icon}</span>
-      <span><strong>${GENERAL.name}</strong><small>Chat with your AI tutor about anything</small></span>
+    ${hasApiKey() ? '' : `<a class="banner" href="#/settings">${t('home.keyBanner')}</a>`}
+    <a class="card wide" href="#/topic/general" style="--c:${general.color}">
+      <span class="icon">${general.icon}</span>
+      <span><strong>${esc(general.name)}</strong><small>${t('home.askSub')}</small></span>
     </a>
-    <h2 class="section">Body systems</h2>
+    <h2 class="section">${t('home.systems')}</h2>
     <div class="grid">
-      ${TOPICS.map((t) => `
-        <a class="card" href="#/topic/${t.id}" style="--c:${t.color}">
-          <span class="icon">${t.icon}</span>
-          <strong>${esc(t.name)}</strong>
-          ${done.includes(t.id) ? '<span class="tick" aria-label="Learned">✓</span>' : ''}
+      ${all.map((tp) => `
+        <a class="card" href="#/topic/${tp.id}" style="--c:${tp.color}">
+          <span class="icon">${tp.icon}</span>
+          <strong>${esc(tp.name)}</strong>
+          ${done.includes(tp.id) ? `<span class="tick" aria-label="${t('home.learned')}">✓</span>` : ''}
         </a>`).join('')}
     </div>`;
 }
@@ -113,39 +129,37 @@ function topicView(id) {
     <section class="panel topic-head" style="--c:${topic.color}">
       <div class="topic-icon">${topic.icon}</div>
       <p>${esc(topic.overview)}</p>
-      <h3>Key parts</h3>
+      <h3>${t('topic.keyParts')}</h3>
       <div class="chips">${topic.parts.map((p) => `<span class="chip">${esc(p)}</span>`).join('')}</div>
-      <h3>Remember</h3>
+      <h3>${t('topic.remember')}</h3>
       <ul class="facts">${topic.facts.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>
     </section>`}
 
     <section class="panel">
       <div class="row">
-        <h3>🤖 AI Tutor</h3>
-        <button class="link" id="clear-chat">Clear chat</button>
+        <h3>${t('topic.tutor')}</h3>
+        <button class="link" id="clear-chat">${t('topic.clearChat')}</button>
       </div>
       <div class="chat" id="chat"></div>
       <div class="quick">
-        ${(isGeneral
-          ? ['How do the body systems work together?', 'What is homeostasis?', 'Quiz me on the whole body']
-          : ['Explain this simply', 'Give me a real-life example', 'Quiz me', 'What do students often get wrong?'])
+        ${t(isGeneral ? 'topic.quickGeneral' : 'topic.quick')
           .map((q) => `<button class="pill" data-q="${esc(q)}">${esc(q)}</button>`).join('')}
       </div>
       <form class="composer" id="ask">
-        <textarea id="q" rows="1" placeholder="Ask your tutor…" enterkeyhint="send"></textarea>
-        <button class="send" id="send" aria-label="Send">➤</button>
+        <textarea id="q" rows="1" placeholder="${t('topic.ask')}" enterkeyhint="send"></textarea>
+        <button class="send" id="send" aria-label="${t('topic.send')}">➤</button>
       </form>
     </section>
 
     <section class="panel">
       <div class="row">
-        <h3>📝 What I learned</h3>
-        <a class="btn small" href="#/note/new?topic=${topic.id}">+ Write note</a>
+        <h3>${t('topic.whatILearned')}</h3>
+        <a class="btn small" href="#/note/new?topic=${topic.id}">${t('topic.writeNote')}</a>
       </div>
       ${topicNotes.length
         ? `<div class="list">${topicNotes.map(noteItem).join('')}</div>`
-        : `<p class="muted">After you understand something, write it in your own words. Writing it down is one of the best ways to remember it.</p>`}
-      ${isGeneral ? '' : `<button class="btn ${learned ? 'ghost' : ''} block" id="done">${learned ? '✓ Marked as learned' : 'Mark topic as learned'}</button>`}
+        : `<p class="muted">${t('topic.noNotes')}</p>`}
+      ${isGeneral ? '' : `<button class="btn ${learned ? 'ghost' : ''} block" id="done">${t(learned ? 'topic.isDone' : 'topic.markDone')}</button>`}
     </section>`;
 
   const chatEl = $('#chat');
@@ -156,7 +170,7 @@ function topicView(id) {
   const render = (pendingText) => {
     const items = messages.map((m) => bubble(m.role, m.content));
     if (pendingText !== undefined) items.push(bubble('assistant', pendingText || '…', true));
-    chatEl.innerHTML = items.join('') || `<p class="muted center">Ask a question, or tap a suggestion below.</p>`;
+    chatEl.innerHTML = items.join('') || `<p class="muted center">${t('topic.chatEmpty')}</p>`;
     chatEl.scrollTop = chatEl.scrollHeight;
   };
   render();
@@ -166,7 +180,7 @@ function topicView(id) {
     if (!text) return;
     if (activeRequest) return stopRequest();
     if (!hasApiKey()) {
-      toast('Add your API key in Settings first');
+      toast(t('toast.needKey'));
       location.hash = '#/settings';
       return;
     }
@@ -176,7 +190,7 @@ function topicView(id) {
     store.saveChat(topic.id, messages);
     render('');
     sendBtn.textContent = '■';
-    sendBtn.setAttribute('aria-label', 'Stop');
+    sendBtn.setAttribute('aria-label', t('topic.stop'));
     const ctrl = new AbortController();
     activeRequest = ctrl;
     let partial = '';
@@ -186,7 +200,7 @@ function topicView(id) {
         notes: topicNotes,
         history: apiHistory(messages),
         signal: ctrl.signal,
-        onText: (t) => { partial = t; if (activeRequest === ctrl) render(t); },
+        onText: (txt) => { partial = txt; if (activeRequest === ctrl) render(txt); },
       });
       messages = [...messages, { role: 'assistant', content: reply }];
     } catch (err) {
@@ -201,7 +215,7 @@ function topicView(id) {
       if (chatEl.isConnected) {
         render();
         sendBtn.textContent = '➤';
-        sendBtn.setAttribute('aria-label', 'Send');
+        sendBtn.setAttribute('aria-label', t('topic.send'));
       }
     }
   }
@@ -220,7 +234,7 @@ function topicView(id) {
   });
   view.querySelectorAll('[data-q]').forEach((b) => (b.onclick = () => send(b.dataset.q)));
   $('#clear-chat').onclick = () => {
-    if (!messages.length || !confirm('Clear this conversation?')) return;
+    if (!messages.length || !confirm(t('topic.confirmClear'))) return;
     stopRequest();
     messages = [];
     store.saveChat(topic.id, messages);
@@ -228,7 +242,7 @@ function topicView(id) {
   };
   $('#done')?.addEventListener('click', () => {
     const now = store.toggleDone(topic.id);
-    toast(now ? 'Nice work! Topic marked as learned 🎉' : 'Unmarked');
+    toast(t(now ? 'toast.markedDone' : 'toast.unmarked'));
     topicView(id);
   });
 }
@@ -255,12 +269,12 @@ function autoGrow(el) {
 }
 
 function noteItem(n) {
-  const t = getTopic(n.topic);
+  const tp = getTopic(n.topic);
   return `
     <a class="note-item" href="#/note/${n.id}">
-      <span class="dot" style="--c:${t?.color || '#888'}">${t?.icon || '📝'}</span>
+      <span class="dot" style="--c:${tp?.color || '#888'}">${tp?.icon || '📝'}</span>
       <span class="grow">
-        <strong>${esc(n.title || 'Untitled note')}</strong>
+        <strong>${esc(n.title || t('note.untitled'))}</strong>
         <small>${esc((n.body || '').slice(0, 90))}</small>
       </span>
       <span class="meta">${n.score ? `<b>${esc(n.score)}</b>` : ''}<small>${fmtDate(n.updatedAt)}</small></span>
@@ -268,19 +282,19 @@ function noteItem(n) {
 }
 
 function notesView() {
-  setTitle('My Notes');
+  setTitle(t('notes.title'));
   setTab('notes');
   const all = store.getNotes();
   view.innerHTML = `
     <div class="toolbar">
-      <input id="search" type="search" placeholder="Search notes…" aria-label="Search notes">
-      <select id="filter" aria-label="Filter by topic">
-        <option value="">All topics</option>
-        ${[GENERAL, ...TOPICS].map((t) => `<option value="${t.id}">${t.icon} ${esc(t.name)}</option>`).join('')}
+      <input id="search" type="search" placeholder="${t('notes.search')}" aria-label="${t('notes.search')}">
+      <select id="filter" aria-label="${t('notes.filter')}">
+        <option value="">${t('notes.allTopics')}</option>
+        ${topicOptions('')}
       </select>
     </div>
     <div class="list" id="notes"></div>
-    <a class="fab" href="#/note/new" aria-label="New note">＋</a>`;
+    <a class="fab" href="#/note/new" aria-label="${t('notes.new')}">＋</a>`;
 
   const draw = () => {
     const q = $('#search').value.toLowerCase();
@@ -288,7 +302,7 @@ function notesView() {
     const list = all.filter((n) => (!f || n.topic === f) && (!q || `${n.title} ${n.body}`.toLowerCase().includes(q)));
     $('#notes').innerHTML = list.length
       ? list.map(noteItem).join('')
-      : `<div class="empty"><p>📝</p><p>${all.length ? 'No notes match.' : 'No notes yet. When you understand something, write it down here in your own words.'}</p></div>`;
+      : `<div class="empty"><p>📝</p><p>${t(all.length ? 'notes.noMatch' : 'notes.empty')}</p></div>`;
   };
   $('#search').oninput = draw;
   $('#filter').onchange = draw;
@@ -299,34 +313,34 @@ function noteEditView(id, params) {
   const existing = id === 'new' ? null : store.getNote(id);
   if (id !== 'new' && !existing) return (location.hash = '#/notes');
   let note = existing || { title: '', body: '', topic: params.get('topic') || '' };
-  setTitle(existing ? 'Edit Note' : 'New Note', '#/notes');
+  setTitle(t(existing ? 'note.editTitle' : 'note.newTitle'), '#/notes');
   setTab('notes');
 
   view.innerHTML = `
     <form class="panel editor" id="form">
-      <label>Topic
+      <label>${t('note.topic')}
         <select id="topic">
-          <option value="">— choose —</option>
-          ${[GENERAL, ...TOPICS].map((t) => `<option value="${t.id}" ${t.id === note.topic ? 'selected' : ''}>${t.icon} ${esc(t.name)}</option>`).join('')}
+          <option value="">${t('note.choose')}</option>
+          ${topicOptions(note.topic)}
         </select>
       </label>
-      <label>Title
-        <input id="title-in" maxlength="120" placeholder="e.g. How the heart pumps blood" value="${esc(note.title)}">
+      <label>${t('note.title')}
+        <input id="title-in" maxlength="120" placeholder="${t('note.titlePh')}" value="${esc(note.title)}">
       </label>
-      <label>What I know (in my own words)
-        <textarea id="body" rows="10" placeholder="Write what you understand without looking at the material. It's okay to be unsure — the AI can check it for you.">${esc(note.body)}</textarea>
+      <label>${t('note.body')}
+        <textarea id="body" rows="10" placeholder="${t('note.bodyPh')}">${esc(note.body)}</textarea>
       </label>
       <div class="actions">
-        <button class="btn" type="submit">💾 Save</button>
-        <button class="btn ghost" type="button" id="check">🤖 Check my understanding</button>
+        <button class="btn" type="submit">${t('note.save')}</button>
+        <button class="btn ghost" type="button" id="check">${t('note.check')}</button>
       </div>
-      ${existing ? `<p class="muted small">Last saved ${new Date(existing.updatedAt).toLocaleString()}</p>` : ''}
+      ${existing ? `<p class="muted small">${t('note.lastSaved', { time: new Date(existing.updatedAt).toLocaleString(locale()) })}</p>` : ''}
     </form>
     <section class="panel ${note.feedback ? '' : 'hidden'}" id="fb-panel">
-      <h3>AI feedback</h3>
+      <h3>${t('note.feedback')}</h3>
       <div class="feedback" id="feedback">${note.feedback ? md(note.feedback) : ''}</div>
     </section>
-    ${existing ? '<button class="btn danger block" id="delete">Delete note</button>' : ''}`;
+    ${existing ? `<button class="btn danger block" id="delete">${t('note.delete')}</button>` : ''}`;
 
   const read = () => ({
     ...note,
@@ -337,7 +351,7 @@ function noteEditView(id, params) {
 
   const persist = () => {
     const data = read();
-    if (!data.body && !data.title) { toast('Write something first'); return null; }
+    if (!data.body && !data.title) { toast(t('toast.writeFirst')); return null; }
     note = store.saveNote(data);
     if (id === 'new') { history.replaceState(null, '', `#/note/${note.id}`); id = note.id; }
     return note;
@@ -345,20 +359,20 @@ function noteEditView(id, params) {
 
   $('#form').onsubmit = (e) => {
     e.preventDefault();
-    if (persist()) toast('Saved ✓');
+    if (persist()) toast(t('toast.saved'));
   };
 
   $('#check').onclick = async () => {
     if (activeRequest) return stopRequest();
-    if (!hasApiKey()) { toast('Add your API key in Settings first'); location.hash = '#/settings'; return; }
-    if (read().body.length < 15) { toast('Write a bit more first'); return; }
+    if (!hasApiKey()) { toast(t('toast.needKey')); location.hash = '#/settings'; return; }
+    if (read().body.length < 15) { toast(t('toast.writeMore')); return; }
     if (!persist()) return;
     const btn = $('#check');
     const panel = $('#fb-panel');
     const fb = $('#feedback');
     panel.classList.remove('hidden');
-    fb.innerHTML = '<p class="muted">Reading your note…</p>';
-    btn.textContent = '■ Stop';
+    fb.innerHTML = `<p class="muted">${t('note.reading')}</p>`;
+    btn.textContent = t('note.stop');
     const ctrl = new AbortController();
     activeRequest = ctrl;
     try {
@@ -366,78 +380,93 @@ function noteEditView(id, params) {
         topic: getTopic(note.topic),
         note,
         signal: ctrl.signal,
-        onText: (t) => { if (fb.isConnected) fb.innerHTML = md(t); },
+        onText: (txt) => { if (fb.isConnected) fb.innerHTML = md(txt); },
       });
-      const score = text.match(/Score:\**\s*(\d+(?:\.\d+)?\s*\/\s*10)/i)?.[1]?.replace(/\s/g, '');
+      const score = text.match(/(?:Score|分數)\s*[:：]\**\s*(\d+(?:\.\d+)?\s*\/\s*10)/i)?.[1]?.replace(/\s/g, '');
       note = store.saveNote({ ...note, feedback: text, score: score || note.score });
-      toast('Feedback saved with your note');
+      toast(t('toast.feedbackSaved'));
     } catch (err) {
       if (fb.isConnected) fb.innerHTML = `<p class="error">${esc(friendlyError(err))}</p>`;
     } finally {
       if (activeRequest === ctrl) activeRequest = null;
-      if (btn.isConnected) btn.textContent = '🤖 Check my understanding';
+      if (btn.isConnected) btn.textContent = t('note.check');
     }
   };
 
   $('#delete')?.addEventListener('click', () => {
-    if (!confirm('Delete this note? This cannot be undone.')) return;
+    if (!confirm(t('note.confirmDelete'))) return;
     store.deleteNote(note.id);
-    toast('Note deleted');
+    toast(t('toast.deleted'));
     location.hash = '#/notes';
   });
 }
 
 function settingsView() {
-  setTitle('Settings');
+  setTitle(t('settings.title'));
   setTab('settings');
   const s = store.getSettings();
+  const lang = getLang();
   view.innerHTML = `
     <section class="panel">
-      <h3>🤖 AI tutor</h3>
-      <label>AI provider
+      <h3>${t('settings.language')}</h3>
+      <div class="segmented" role="radiogroup" aria-label="${t('settings.language')}">
+        ${LANGUAGES.map((l) => `<button type="button" role="radio" aria-checked="${l.id === lang}" data-lang="${l.id}">${l.label}</button>`).join('')}
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>${t('settings.aiTutor')}</h3>
+      <label>${t('settings.provider')}
         <select id="provider">${PROVIDERS.map((p) => `<option value="${p.id}" ${p.id === s.provider ? 'selected' : ''}>${p.label}</option>`).join('')}</select>
       </label>
 
       <div id="claude-fields">
-        <label>Claude API key
+        <label>${t('settings.claudeKey')}
           <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(s.apiKey)}">
         </label>
-        <p class="muted small">Get a key at <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>. Usage is billed to your Anthropic account.</p>
-        <label>Model
-          <select id="model">${MODELS.map((m) => `<option value="${m.id}" ${m.id === s.model ? 'selected' : ''}>${m.label}</option>`).join('')}</select>
+        <p class="muted small">${t('settings.claudeHelp')}</p>
+        <label>${t('settings.model')}
+          <select id="model">${claudeModels().map((m) => `<option value="${m.id}" ${m.id === s.model ? 'selected' : ''}>${m.label}</option>`).join('')}</select>
         </label>
       </div>
 
       <div id="gemini-fields">
-        <label>Gemini API key
+        <label>${t('settings.geminiKey')}
           <input id="gkey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…" value="${esc(s.geminiKey)}">
         </label>
-        <p class="muted small">Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>. Gemini has a free tier with usage limits.</p>
-        <label>Model
+        <p class="muted small">${t('settings.geminiHelp')}</p>
+        <label>${t('settings.model')}
           <select id="gmodel"></select>
         </label>
-        <button class="link" id="load-models" type="button">Load all models for my key</button>
+        <button class="link" id="load-models" type="button">${t('settings.loadModels')}</button>
       </div>
 
-      <p class="muted small">Keys are saved only on this device and sent only to the provider you choose.</p>
-      <button class="btn block" id="save">Save</button>
+      <p class="muted small">${t('settings.keysLocal')}</p>
+      <button class="btn block" id="save">${t('settings.save')}</button>
     </section>
 
     <section class="panel">
-      <h3>💾 Backup</h3>
-      <p class="muted small">Your notes are stored on this phone. Download a backup now and then, or to move notes to another device.</p>
+      <h3>${t('settings.backup')}</h3>
+      <p class="muted small">${t('settings.backupHelp')}</p>
       <div class="actions">
-        <button class="btn ghost" id="export">Download backup</button>
-        <label class="btn ghost file">Restore backup<input id="import" type="file" accept="application/json,.json" hidden></label>
+        <button class="btn ghost" id="export">${t('settings.export')}</button>
+        <label class="btn ghost file">${t('settings.import')}<input id="import" type="file" accept="application/json,.json" hidden></label>
       </div>
     </section>
 
     <section class="panel">
-      <h3>📱 Install on your phone</h3>
-      <button class="btn block" id="install" hidden>Install app</button>
-      <p class="muted small"><b>Android (Chrome):</b> menu ⋮ → <i>Add to Home screen / Install app</i>.<br>
-      <b>iPhone (Safari):</b> Share button → <i>Add to Home Screen</i>.</p>
+      <h3>${t('settings.install')}</h3>
+      <button class="btn block" id="install" hidden>${t('settings.installBtn')}</button>
+      <p class="muted small">${t('settings.installHelp')}</p>
     </section>`;
+
+  // Switching language applies right away.
+  view.querySelectorAll('[data-lang]').forEach((b) => (b.onclick = () => {
+    if (b.dataset.lang === getLang()) return;
+    store.saveSettings({ lang: b.dataset.lang });
+    applyLanguage();
+    settingsView();
+  }));
 
   const providerSel = $('#provider');
   const showProvider = () => {
@@ -451,15 +480,15 @@ function settingsView() {
     if (!models.some((m) => m.id === s.geminiModel)) models = [{ id: s.geminiModel, label: s.geminiModel }, ...models];
     $('#gmodel').innerHTML = models.map((m) => `<option value="${esc(m.id)}" ${m.id === s.geminiModel ? 'selected' : ''}>${esc(m.label)}</option>`).join('');
   };
-  fillGeminiModels(GEMINI_MODELS);
+  fillGeminiModels(geminiModels());
   $('#load-models').onclick = async () => {
     const key = $('#gkey').value.trim();
-    if (!key) { toast('Enter your Gemini API key first'); return; }
+    if (!key) { toast(t('toast.enterGeminiKey')); return; }
     try {
       const models = await listGeminiModels(key);
       s.geminiModel = $('#gmodel').value;
-      fillGeminiModels([...GEMINI_MODELS, ...models]);
-      toast(`Loaded ${models.length} models`);
+      fillGeminiModels([...geminiModels(), ...models]);
+      toast(t('toast.loadedModels', { n: models.length }));
     } catch (err) {
       toast(friendlyError(err));
     }
@@ -473,7 +502,7 @@ function settingsView() {
       geminiKey: $('#gkey').value.trim(),
       geminiModel: $('#gmodel').value,
     });
-    toast('Settings saved ✓');
+    toast(t('toast.settingsSaved'));
   };
   $('#export').onclick = () => {
     const blob = new Blob([store.exportData()], { type: 'application/json' });
@@ -488,9 +517,9 @@ function settingsView() {
     if (!file) return;
     try {
       const n = store.importData(await file.text());
-      toast(`Restored ${n} notes ✓`);
+      toast(t('toast.restored', { n }));
     } catch (err) {
-      toast(err.message || 'Could not read that file');
+      toast(t(err.message === 'not-backup' ? 'err.notBackup' : 'toast.badFile'));
     }
     e.target.value = '';
   };
@@ -532,5 +561,6 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 }
 
 store.requestPersistence();
+applyLanguage();
 window.addEventListener('hashchange', route);
 route();
