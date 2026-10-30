@@ -73,6 +73,13 @@ function applyLanguage() {
   $('#back').setAttribute('aria-label', t('nav.back'));
 }
 
+// "Thinking…" with animated dots; after a few seconds it also shows how long.
+function thinkingHtml(startedAt) {
+  const secs = Math.floor((Date.now() - startedAt) / 1000);
+  const label = secs >= 5 ? t('thinking.long', { s: secs }) : t('thinking.label');
+  return `<span class="thinking"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>${esc(label)}</span>`;
+}
+
 function stopRequest() {
   activeRequest?.abort();
   activeRequest = null;
@@ -174,9 +181,11 @@ function topicView(id) {
   const sendBtn = $('#send');
   let messages = store.getChat(topic.id);
 
+  let startedAt = 0;
   const render = (pendingText) => {
     const items = messages.map((m) => bubble(m.role, m.content));
-    if (pendingText !== undefined) items.push(bubble('assistant', pendingText || '…', true));
+    if (pendingText) items.push(bubble('assistant', pendingText, true));
+    else if (pendingText !== undefined) items.push(`<div class="msg assistant pending" role="status">${thinkingHtml(startedAt)}</div>`);
     chatEl.innerHTML = items.join('') || `<p class="muted center">${t('topic.chatEmpty')}</p>`;
     chatEl.scrollTop = chatEl.scrollHeight;
   };
@@ -195,12 +204,15 @@ function topicView(id) {
     autoGrow(input);
     messages = [...messages, { role: 'user', content: text }];
     store.saveChat(topic.id, messages);
-    render('');
     sendBtn.textContent = '■';
     sendBtn.setAttribute('aria-label', t('topic.stop'));
     const ctrl = new AbortController();
     activeRequest = ctrl;
     let partial = '';
+    startedAt = Date.now();
+    render('');
+    // Update the "thinking" seconds until the first words arrive.
+    const tick = setInterval(() => { if (!partial && activeRequest === ctrl && chatEl.isConnected) render(''); }, 1000);
     try {
       const reply = await askTutor({
         topic,
@@ -217,6 +229,7 @@ function topicView(id) {
         ? { role: 'assistant', content: `${partial}\n\n${note}` }
         : { role: 'assistant', content: note, error: true }];
     } finally {
+      clearInterval(tick);
       if (activeRequest === ctrl) activeRequest = null;
       store.saveChat(topic.id, messages);
       if (chatEl.isConnected) {
@@ -406,8 +419,12 @@ function openImageDialog({ topic, history, note: givenNote }) {
   const generate = async () => {
     if (!hasApiKey()) { close(); toast(t('toast.needKey')); location.hash = '#/settings'; return; }
     actions.hidden = true;
-    body.innerHTML = `<div class="loading"><span class="spinner"></span><p class="muted">${t('summary.making')}</p></div>`;
+    body.innerHTML = `<div class="loading"><span class="spinner"></span><p class="muted">${t('summary.making')}</p><p id="sum-wait"></p></div>`;
     ctrl = new AbortController();
+    const startedAt = Date.now();
+    const showWait = () => { const el = $('#sum-wait', dialog); if (el) el.innerHTML = thinkingHtml(startedAt); };
+    showWait();
+    const tick = setInterval(showWait, 1000);
     try {
       const card = await summarizeChat({ topic, history, signal: ctrl.signal });
       note = store.addAiNote({ topic: topic.id, card, at: Date.now(), chatLength: history.length, lang: getLang() });
@@ -419,6 +436,7 @@ function openImageDialog({ topic, history, note: givenNote }) {
       $('#sum-download', dialog).hidden = true;
       $('#sum-share', dialog).hidden = true;
     } finally {
+      clearInterval(tick);
       ctrl = null;
     }
   };
@@ -628,16 +646,20 @@ function noteEditView(id, params) {
     const panel = $('#fb-panel');
     const fb = $('#feedback');
     panel.classList.remove('hidden');
-    fb.innerHTML = `<p class="muted">${t('note.reading')}</p>`;
     btn.textContent = t('note.stop');
     const ctrl = new AbortController();
     activeRequest = ctrl;
+    const startedAt = Date.now();
+    let gotText = false;
+    const showThinking = () => { if (!gotText && fb.isConnected) fb.innerHTML = `<p class="muted">${t('note.reading')}</p><p>${thinkingHtml(startedAt)}</p>`; };
+    showThinking();
+    const tick = setInterval(showThinking, 1000);
     try {
       const text = await checkNote({
         topic: getTopic(note.topic),
         note,
         signal: ctrl.signal,
-        onText: (txt) => { if (fb.isConnected) fb.innerHTML = md(txt); },
+        onText: (txt) => { gotText = true; if (fb.isConnected) fb.innerHTML = md(txt); },
       });
       const score = text.match(/(?:Score|分數)\s*[:：]\**\s*(\d+(?:\.\d+)?\s*\/\s*10)/i)?.[1]?.replace(/\s/g, '');
       note = store.saveNote({ ...note, feedback: text, score: score || note.score });
@@ -645,6 +667,7 @@ function noteEditView(id, params) {
     } catch (err) {
       if (fb.isConnected) fb.innerHTML = `<p class="error">${esc(friendlyError(err))}</p>`;
     } finally {
+      clearInterval(tick);
       if (activeRequest === ctrl) activeRequest = null;
       if (btn.isConnected) btn.textContent = t('note.check');
     }

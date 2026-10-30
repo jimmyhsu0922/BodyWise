@@ -169,6 +169,12 @@ const STRINGS = {
     'err.geminiLimit': 'Gemini usage limit reached — wait a moment and try again.',
     'err.api': 'AI error: {detail}',
     'err.unknown': 'Something went wrong.',
+    'thinking.label': 'Thinking…',
+    'thinking.long': 'Still thinking… {s}s',
+    'err.timeout': 'The AI took too long to answer, so it was stopped. Please try again — a shorter question or the “Short” answer length is faster.',
+    'err.busy': 'The AI service is busy right now. Please try again in a moment.',
+    'err.truncated': 'The answer hit the length limit and was cut off. Send “continue” to get the rest.',
+    'err.summaryTooLong': 'The summary got too long to finish. Please try again.',
   },
 
   'zh-Hant': {
@@ -322,6 +328,12 @@ const STRINGS = {
     'err.geminiLimit': '已達 Gemini 使用上限，請稍等一下再試。',
     'err.api': 'AI 發生錯誤：{detail}',
     'err.unknown': '發生了一些問題。',
+    'thinking.label': 'AI 思考中…',
+    'thinking.long': '仍在思考中… 已 {s} 秒',
+    'err.timeout': 'AI 回應太久，已自動停止。請再試一次（問題簡短一點，或把回答長度改成「短」會比較快）。',
+    'err.busy': 'AI 服務目前忙碌中，請稍後再試。',
+    'err.truncated': '回答超過長度上限，被截斷了。可以輸入「繼續」看後面的內容。',
+    'err.summaryTooLong': '整理的內容太長，沒能完成，請再試一次。',
   },
 };
 

@@ -61,7 +61,7 @@ Always:
 }
 
 /* ---------- Claude ---------- */
-async function streamClaude({ system, messages, onText, signal, schema }) {
+async function streamClaude({ system, messages, onText, onActivity, signal, schema }) {
   const { apiKey, model } = getSettings();
   if (!apiKey) throw new Error(t('err.needClaudeKey'));
   const params = {
@@ -79,18 +79,21 @@ async function streamClaude({ system, messages, onText, signal, schema }) {
     params.fallbacks = 'default';
   }
 
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  // One quick retry at most, so a busy or rate-limited API fails fast
+  // instead of leaving the student waiting.
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true, maxRetries: 1 });
   const stream = client.beta.messages.stream(params, { signal });
   let text = '';
   stream.on('text', (delta) => {
     text += delta;
+    onActivity?.();
     onText?.(text);
   });
   const message = await stream.finalMessage();
   if (message.stop_reason === 'refusal') {
     throw new Error(t('err.refusal'));
   }
-  return text;
+  return { text, truncated: message.stop_reason === 'max_tokens' };
 }
 
 /* ---------- Gemini ---------- */
@@ -103,10 +106,11 @@ async function geminiFailure(res) {
   if (res.status === 403) return new GeminiError(t('err.geminiPermission'));
   if (res.status === 404) return new GeminiError(t('err.geminiModel'));
   if (res.status === 429) return new GeminiError(t('err.geminiLimit'));
+  if (res.status >= 500) return new GeminiError(t('err.busy'));
   return new GeminiError(t('err.api', { detail: detail || res.statusText || res.status }));
 }
 
-async function streamGemini({ system, messages, onText, signal, schema }) {
+async function streamGemini({ system, messages, onText, onActivity, signal, schema }) {
   const { geminiKey, geminiModel } = getSettings();
   if (!geminiKey) throw new Error(t('err.needGeminiKey'));
   let res;
@@ -132,6 +136,7 @@ async function streamGemini({ system, messages, onText, signal, schema }) {
   let buffer = '';
   let text = '';
   let blocked = false;
+  let truncated = false;
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -144,14 +149,17 @@ async function streamGemini({ system, messages, onText, signal, schema }) {
       try { chunk = JSON.parse(line.slice(5)); } catch { continue; }
       const cand = chunk.candidates?.[0];
       if (chunk.promptFeedback?.blockReason || cand?.finishReason === 'SAFETY') blocked = true;
+      if (cand?.finishReason === 'MAX_TOKENS') truncated = true;
+      const before = text.length;
       for (const part of cand?.content?.parts || []) {
         if (part.text && !part.thought) text += part.text;
       }
+      if (text.length > before) onActivity?.();
       onText?.(text);
     }
   }
   if (!text && blocked) throw new GeminiError(t('err.refusal'));
-  return text;
+  return { text, truncated };
 }
 
 // Lists Gemini models the key can use for chat, for the Settings dropdown.
@@ -165,26 +173,62 @@ export async function listGeminiModels(key) {
 }
 
 /* ---------- Shared ---------- */
-function streamReply(args) {
-  return getSettings().provider === 'gemini' ? streamGemini(args) : streamClaude(args);
+class TimeoutError extends Error {}
+
+// Time limits so the student is never left waiting with no answer:
+const FIRST_TEXT_MS = 90_000; // thinking before the first words appear
+const STALL_MS = 45_000; // a pause in the middle of an answer
+const TOTAL_MS = 240_000; // the whole answer
+
+// Streams a reply from the chosen provider. Resolves to { text, truncated };
+// truncated means the answer hit the length limit and was cut off.
+async function streamReply(args) {
+  const ctrl = new AbortController();
+  const stopFromOutside = () => ctrl.abort();
+  args.signal?.addEventListener('abort', stopFromOutside);
+  let timedOut = false;
+  const expire = () => { timedOut = true; ctrl.abort(); };
+  let waitTimer = setTimeout(expire, FIRST_TEXT_MS);
+  const totalTimer = setTimeout(expire, TOTAL_MS);
+  const onActivity = () => {
+    clearTimeout(waitTimer);
+    waitTimer = setTimeout(expire, STALL_MS);
+  };
+  const run = getSettings().provider === 'gemini' ? streamGemini : streamClaude;
+  try {
+    return await run({ ...args, signal: ctrl.signal, onActivity });
+  } catch (err) {
+    if (timedOut) throw new TimeoutError(t('err.timeout'));
+    throw err;
+  } finally {
+    clearTimeout(waitTimer);
+    clearTimeout(totalTimer);
+    args.signal?.removeEventListener('abort', stopFromOutside);
+  }
+}
+
+// Text for the chat or feedback, with a note if it was cut off.
+function withTruncationNote({ text, truncated }) {
+  return truncated ? `${text}\n\n*${t('err.truncated')}*` : text;
 }
 
 export function friendlyError(err) {
   if (err?.name === 'AbortError' || err instanceof Anthropic.APIUserAbortError) return t('err.stopped');
-  if (err instanceof GeminiError) return err.message;
+  if (err instanceof GeminiError || err instanceof TimeoutError) return err.message;
   if (err instanceof Anthropic.AuthenticationError) return t('err.claudeAuth');
   if (err instanceof Anthropic.PermissionDeniedError) return t('err.claudePermission');
   if (err instanceof Anthropic.RateLimitError) return t('err.rateLimit');
+  if (err instanceof Anthropic.InternalServerError || err?.status === 529) return t('err.busy');
   if (err instanceof Anthropic.APIConnectionError) return t('err.connection');
   if (err instanceof Anthropic.APIError) return t('err.api', { detail: err.message });
   return err?.message || t('err.unknown');
 }
 
-export function askTutor({ topic, notes, history, onText, signal }) {
-  return streamReply({ system: tutorSystem(topic, notes), messages: history, onText, signal });
+export async function askTutor({ topic, notes, history, onText, signal }) {
+  return withTruncationNote(await streamReply({ system: tutorSystem(topic, notes), messages: history, onText, signal }));
 }
 
-export function checkNote({ topic, note, onText, signal }) {
+export async function checkNote({ topic, note, onText, signal }) {
   const zh = getLang() === 'zh-Hant';
   const system = `You are a supportive biology teacher reviewing a student's study note about the human body. The student wrote it from memory after studying, to check their understanding. Write your feedback in ${replyLanguage()}.`;
   const format = zh
@@ -209,7 +253,7 @@ ${note.body}
 """
 
 ${format}`;
-  return streamReply({ system, messages: [{ role: 'user', content: prompt }], onText, signal });
+  return withTruncationNote(await streamReply({ system, messages: [{ role: 'user', content: prompt }], onText, signal }));
 }
 
 /* ---------- Summary card ---------- */
@@ -269,7 +313,8 @@ Create the summary card content as JSON with these fields:
   - "answer": a direct answer to exactly what the student asked, built from the conversation, accurate and specific (${zh ? '最多 60 個字' : 'at most 35 words'}).
 - "takeaway": the single most important idea to remember, ${zh ? '最多 30 個字' : 'at most 18 words'}.
 Use plain text only (no Markdown). Base everything on the conversation; correct the tutor's wording only if it was scientifically wrong.`;
-  const text = await streamReply({ system, messages: [{ role: 'user', content: prompt }], signal, schema: SUMMARY_SCHEMA });
+  const { text, truncated } = await streamReply({ system, messages: [{ role: 'user', content: prompt }], signal, schema: SUMMARY_SCHEMA });
+  if (truncated) throw new Error(t('err.summaryTooLong'));
   const card = parseJson(text);
   if (!Array.isArray(card.points) || !card.points.length) throw new Error(t('err.summaryParse'));
   card.points = card.points.slice(0, 6);
