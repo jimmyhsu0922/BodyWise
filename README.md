@@ -8,7 +8,7 @@ A phone-installable web app (PWA) for learning the human body.
 - **Backup** — download or restore your notes as a JSON file (Settings).
 - **Language** — English or 繁體中文 (Settings → Language). The topics, screens, and AI replies all follow the chosen language. The first time it opens, the app picks the phone's language.
 
-Plain HTML/CSS/JS, no build step.
+Plain HTML/CSS/JS, no build step. See [CHANGELOG.md](CHANGELOG.md) for the update and debug history.
 
 ## Run on your computer
 
