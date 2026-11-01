@@ -2,6 +2,8 @@
 
 A phone-installable web app (PWA) for learning the human body.
 
+**Open the app:** https://jimmyhsu0922.github.io/BodyWise/
+
 - **Learn** — 12 body-system topics with an overview, key parts and facts, plus "Ask Anything".
 - **AI Tutor** — chat with Claude or Gemini about each topic; it can explain, give examples, and quiz you. It also reads your notes for that topic, so it can correct mistakes.
 - **What I learned** — write what you understand in your own words. Notes are saved on your phone. Tap **Check my understanding** and the AI marks what's right, what to fix, what's missing, and gives a score.
@@ -21,9 +23,9 @@ Open http://localhost:5180.
 
 ## Put it on your phone
 
-Installing needs an **https** address, so host this folder online (free options: Cloudflare Pages, GitHub Pages, Netlify). With Cloudflare Pages, use **Build output directory** `/` and no build command.
+The app is hosted on GitHub Pages at https://jimmyhsu0922.github.io/BodyWise/. Every push to `main` redeploys it automatically (`.github/workflows/deploy.yml`; no build step). In the repository's **Settings → Pages**, the source must be **GitHub Actions**.
 
-Then open the address on your phone:
+Open the address on your phone:
 
 - **Android (Chrome):** menu ⋮ → *Install app* / *Add to Home screen*
 - **iPhone (Safari):** Share → *Add to Home Screen*

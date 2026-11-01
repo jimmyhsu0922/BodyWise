@@ -12,6 +12,7 @@
 
 | 日期時間 | 類型 | 內容 | Commit |
 |---|---|---|---|
+| 2026-11-01 17:08 | 📦 | 部署到 GitHub Pages：https://jimmyhsu0922.github.io/BodyWise/ | `d7e0c46` |
 | 2026-10-30 22:45 | ✨ | 使用者可新增 AI 筆記；同標題的筆記可以對照 | `518bd7d` |
 | 2026-10-30 22:41 | 🔧 | AI 導師回答後不再反問使用者 | `a62b7ce` |
 | 2026-10-30 22:35 | 🔧 | AI 思考中顯示狀態；等太久或超過上限時顯示錯誤 | `8f07986` |
@@ -26,6 +27,30 @@
 | 2026-10-30 約 16:20 | 🐞 | 錯誤訊息不再被送回 AI；修正斜體顯示 | `23aa9d3` |
 | 2026-10-30 約 16:10 | 🐞 | 修正 App 圖示愛心兩側的缺口 | `23aa9d3` |
 | 2026-10-30 約 16:00 | ✨ | 第一版：人體系統主題、AI 導師、筆記、PWA | `23aa9d3` |
+
+---
+
+## 2026-11-01
+
+### 17:08 📦 部署到 GitHub Pages — `d7e0c46`
+
+**網址：https://jimmyhsu0922.github.io/BodyWise/**
+
+**更新內容**
+- 新增 `.github/workflows/deploy.yml`：每次 push 到 `main`，GitHub Actions 會自動把網站部署到 GitHub Pages。
+- README 加上網址和部署說明。
+
+**和參考教學的差異**
+- 教學是給 Vite 專案用的，會先執行 `npm ci`、`npm run build`，再上傳 `dist` 資料夾。
+- BodyWise 是純 HTML/CSS/JS，沒有 `package.json` 也不需要建置，照抄的話 `npm ci` 會失敗、無法部署。所以拿掉 Node 和建置步驟，直接上傳專案資料夾（`path: .`）。
+- Actions 版本先查過 GitHub 上的最新版，使用 `checkout@v7`、`configure-pages@v6`、`upload-pages-artifact@v5`、`deploy-pages@v5`。
+
+**測試**
+- GitHub Actions 部署成功。
+- 網址的首頁、JS、manifest、圖示都正常回應；在瀏覽器打開 App，四個分頁和 12 個主題都正常顯示，沒有錯誤，離線功能也已啟用。
+
+**過程中的除錯**
+- ℹ️ 先前檢查時發現 `bodywise.pages.dev` 可以打開，但那是別人用 Next.js 做的網站，不是 BodyWise。BodyWise 之前並沒有部署到 Cloudflare Pages。
 
 ---
 
