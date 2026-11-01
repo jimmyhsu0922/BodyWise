@@ -256,6 +256,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb
 }
 .ai-note-text .badge { align-self: flex-start; margin: 4px 0 0; }
 button.fab { border: 0; cursor: pointer; }
+.field-label { margin: 0 0 4px; font-weight: 600; font-size: .9rem; }
+.photo-field { margin-bottom: 12px; }
+.photo-field .muted { margin: 0 0 8px; }
+.photo-pick { display: inline-flex; margin-bottom: 8px; }
+.photo-preview { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 6px; }
+.photo-preview img { max-width: 60%; max-height: 180px; border-radius: 10px; border: 1px solid var(--line); }
+.photo-label { margin-top: 14px; }
+.user-photo { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line); }
 .add-ai label { display: block; font-weight: 600; font-size: .9rem; margin-bottom: 12px; }
 .add-ai label > * { margin-top: 6px; font-weight: 400; font-size: 1rem; }
 .match p { margin: 0 0 8px; }

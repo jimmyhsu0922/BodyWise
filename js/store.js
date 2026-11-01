@@ -149,7 +149,8 @@ export function toggleDone(topicId) {
 }
 
 /* ---------- Backup ---------- */
-export function exportData() {
+// images: { [id]: dataURL } of the pictures attached to AI notes.
+export function exportData(images = {}) {
   return JSON.stringify({
     app: 'body-study',
     version: 1,
@@ -157,6 +158,7 @@ export function exportData() {
     notes: read(KEYS.notes, []),
     chats: read(KEYS.chats, {}),
     aiNotes: getAiNotes(),
+    images,
     done: getDone(),
   }, null, 2);
 }
@@ -176,5 +178,5 @@ export function importData(text) {
   for (const n of data.aiNotes || []) if (!aiById.has(n.id)) aiById.set(n.id, n);
   write(KEYS.aiNotes, [...aiById.values()]);
   write(KEYS.done, [...new Set([...getDone(), ...(data.done || [])])]);
-  return data.notes.length;
+  return { count: data.notes.length, images: data.images || {} };
 }

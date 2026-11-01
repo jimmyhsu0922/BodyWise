@@ -99,6 +99,14 @@ async function streamClaude({ system, messages, onText, onActivity, signal, sche
 /* ---------- Gemini ---------- */
 class GeminiError extends Error {}
 
+// Message content is a string, or Claude-style blocks (text and base64 images).
+function geminiParts(content) {
+  if (typeof content === 'string') return [{ text: content }];
+  return content.map((b) => (b.type === 'image'
+    ? { inlineData: { mimeType: b.source.media_type, data: b.source.data } }
+    : { text: b.text }));
+}
+
 async function geminiFailure(res) {
   let detail = '';
   try { detail = (await res.json()).error?.message || ''; } catch { /* not JSON */ }
@@ -121,7 +129,7 @@ async function streamGemini({ system, messages, onText, onActivity, signal, sche
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
-        contents: messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+        contents: messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: geminiParts(m.content) })),
         generationConfig: { maxOutputTokens: 8000, ...(schema && { responseMimeType: 'application/json' }) },
       }),
     });
@@ -325,27 +333,38 @@ function finishCard({ text, truncated }, maxPoints) {
 }
 
 // An AI note the student asks for directly: a title (often the same as one
-// of their own notes, so they can compare) and optional questions.
-export async function writeAiNote({ topic, title, questions, signal }) {
+// of their own notes, so they can compare), optional questions, and an
+// optional picture (a textbook page, diagram, or handwritten notes) for the
+// AI to read. image: { mediaType, base64 }.
+export async function writeAiNote({ topic, title, questions, image, signal }) {
   const zh = getLang() === 'zh-Hant';
   const system = `You write the text for a one-glance study summary card (an infographic image) about the human body. The student will compare it with their own notes, so be accurate, specific, and cover what matters most. Write everything in ${replyLanguage()}.`;
   const asked = questions.length
     ? `The student's questions, in order:\n${questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
     : 'The student did not list any questions.';
+  const picture = image
+    ? `\nThe student attached a picture (for example a textbook page, a diagram, or their own handwritten notes). Read it carefully and base the card on what it shows, filling gaps with accurate knowledge. If something in the picture is scientifically wrong, give the correct version. If the picture has nothing to do with the human body, say so in the subtitle.`
+    : '';
+  const titleRule = title
+    ? `exactly "${title}" (copy it unchanged)`
+    : `a short title for what ${image ? 'the picture shows' : 'the card covers'} (${zh ? '最多 16 個字' : 'at most 8 words'})`;
   const prompt = `Topic: ${topic.name}
-Card title: ${title}
-${asked}
+Card title: ${title || '(none given — write one)'}
+${asked}${picture}
 
 Create the card content as JSON with these fields:
-- "title": exactly "${title}" (copy it unchanged).
+- "title": ${titleRule}.
 - "subtitle": one sentence saying what the card covers, ${zh ? '最多 30 個字' : 'at most 18 words'}.
-- "points": ${questions.length ? 'one item for each question above, in the same order' : 'the 3 to 5 most important things a student should know about this title, each phrased as a question'}. Each has:
+- "points": ${questions.length ? 'one item for each question above, in the same order' : `the 3 to 5 most important things a student should know about ${image ? 'what the picture shows' : 'this title'}, each phrased as a question`}. Each has:
   - "emoji": one emoji that represents the point,
   - "question": the question, short and clear (${zh ? '最多 20 個字' : 'at most 12 words'}),
   - "answer": a direct, accurate answer (${zh ? '最多 60 個字' : 'at most 35 words'}).
 - "takeaway": the single most important idea to remember, ${zh ? '最多 30 個字' : 'at most 18 words'}.
 Use plain text only (no Markdown).`;
-  const card = finishCard(await streamReply({ system, messages: [{ role: 'user', content: prompt }], signal, schema: SUMMARY_SCHEMA }), 8);
-  card.title = title; // keep it identical so it matches the student's note
+  const content = image
+    ? [{ type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } }, { type: 'text', text: prompt }]
+    : prompt;
+  const card = finishCard(await streamReply({ system, messages: [{ role: 'user', content }], signal, schema: SUMMARY_SCHEMA }), 8);
+  if (title) card.title = title; // keep it identical so it matches the student's note
   return card;
 }

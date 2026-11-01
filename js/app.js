@@ -3,6 +3,7 @@ import * as store from './store.js';
 import { PROVIDERS, claudeModels, geminiModels, hasApiKey, listGeminiModels, askTutor, checkNote, summarizeChat, writeAiNote, friendlyError } from './ai.js';
 import { LANGUAGES, t, getLang, locale } from './i18n.js';
 import { drawCard } from './card.js';
+import * as images from './images.js';
 import { STYLE_IDS, LENGTH_IDS, styleInfo, lengthInfo, tutorSettings } from './tutor.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -387,6 +388,16 @@ function openAddAiNote(prefill = {}) {
       <label>${t('note.title')}
         <input id="an-title" maxlength="120" placeholder="${t('note.titlePh')}" value="${esc(prefill.title || '')}">
       </label>
+      <div class="photo-field">
+        <p class="field-label">${t('aiNotes.photo')}</p>
+        <p class="muted small">${t('aiNotes.photoHelp')}</p>
+        <label class="btn ghost small photo-pick">${t('aiNotes.photoPick')}<input id="an-photo" type="file" accept="image/*" hidden></label>
+        <div class="photo-preview" id="an-preview" hidden>
+          <img alt="">
+          <button class="link" type="button" id="an-photo-remove">${t('aiNotes.photoRemove')}</button>
+        </div>
+        <p class="muted small" id="an-title-help" hidden>${t('aiNotes.titleHelp')}</p>
+      </div>
       <label>${t('aiNotes.questions')}
         <textarea id="an-questions" rows="4" placeholder="${t('aiNotes.questionsPh')}"></textarea>
       </label>
@@ -403,19 +414,44 @@ function openAddAiNote(prefill = {}) {
   $('#an-close', dialog).onclick = close;
   dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
 
-  $('#an-from', dialog)?.addEventListener('change', (e) => {
-    const n = store.getNote(e.target.value);
-    if (!n) return;
-    $('#an-title', dialog).value = n.title;
-    if (n.topic) $('#an-topic', dialog).value = n.topic;
-  });
+  // The picture, shrunk and ready to send: { blob, mediaType, base64 }.
+  let photo = null;
+  const showPhoto = () => {
+    const preview = $('#an-preview', dialog);
+    preview.hidden = !photo;
+    $('#an-title-help', dialog).hidden = !photo;
+    if (photo) $('img', preview).src = URL.createObjectURL(photo.blob);
+  };
+  const bindForm = () => {
+    $('#an-from', dialog)?.addEventListener('change', (e) => {
+      const n = store.getNote(e.target.value);
+      if (!n) return;
+      $('#an-title', dialog).value = n.title;
+      if (n.topic) $('#an-topic', dialog).value = n.topic;
+    });
+    $('#an-photo', dialog).onchange = async (e) => {
+      const file = e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      try {
+        photo = await images.prepareImage(file);
+      } catch {
+        photo = null;
+        toast(t('aiNotes.photoBad'));
+      }
+      showPhoto();
+    };
+    $('#an-photo-remove', dialog).onclick = () => { photo = null; showPhoto(); };
+    showPhoto();
+  };
+  bindForm();
 
   $('#an-go', dialog).onclick = async () => {
     const topic = getTopic($('#an-topic', dialog).value);
     const title = $('#an-title', dialog).value.trim();
     let questions = $('#an-questions', dialog).value.split('\n').map((q) => q.trim()).filter(Boolean);
     if (!topic) { toast(t('aiNotes.needTopic')); return; }
-    if (!title) { toast(t('aiNotes.needTitle')); return; }
+    if (!title && !photo) { toast(t('aiNotes.needTitleOrPhoto')); return; }
     if (!hasApiKey()) { close(); toast(t('toast.needKey')); location.hash = '#/settings'; return; }
     if (questions.length > 8) { toast(t('aiNotes.tooMany')); questions = questions.slice(0, 8); }
 
@@ -429,8 +465,13 @@ function openAddAiNote(prefill = {}) {
     showWait();
     const tick = setInterval(showWait, 1000);
     try {
-      const card = await writeAiNote({ topic, title, questions, signal: ctrl.signal });
-      const note = store.addAiNote({ topic: topic.id, card, at: Date.now(), lang: getLang(), source: 'manual' });
+      const card = await writeAiNote({ topic, title, questions, image: photo && { mediaType: photo.mediaType, base64: photo.base64 }, signal: ctrl.signal });
+      let imageId;
+      if (photo) {
+        imageId = crypto.randomUUID?.() || String(Date.now());
+        await images.putImage(imageId, photo.blob);
+      }
+      const note = store.addAiNote({ topic: topic.id, card, at: Date.now(), lang: getLang(), source: 'manual', imageId });
       dialog.close();
       toast(t('summary.saved'));
       if (location.hash.startsWith('#/ai-notes')) aiNotesView();
@@ -443,6 +484,7 @@ function openAddAiNote(prefill = {}) {
       $('#an-topic', dialog).value = values.topic;
       $('#an-title', dialog).value = values.title;
       $('#an-questions', dialog).value = values.q;
+      bindForm();
       $('#an-actions', dialog).hidden = false;
     } finally {
       clearInterval(tick);
@@ -486,11 +528,18 @@ function compareView(noteId, aiId) {
           ${ai.card.points.map((p) => `<li><strong>${esc(p.emoji)} ${esc(p.question)}</strong><span>${esc(p.answer)}</span></li>`).join('')}
         </ol>
         <p class="takeaway">💡 ${esc(ai.card.takeaway)}</p>
+        <div id="cmp-photo"></div>
         <p class="muted small">${fmtDate(ai.at)}</p>
         <button class="btn ghost small" id="cmp-image">${t('compare.viewImage')}</button>
       </section>
     </div>`;
   $('#cmp-image').onclick = () => openImageDialog({ topic, note: ai });
+  if (ai.imageId) {
+    images.getImage(ai.imageId).then((photo) => {
+      const el = $('#cmp-photo');
+      if (photo && el) el.innerHTML = `<p class="field-label photo-label">${t('aiNotes.yourPhoto')}</p><img class="user-photo" alt="${t('aiNotes.yourPhoto')}" src="${URL.createObjectURL(photo)}">`;
+    }).catch(() => {});
+  }
 }
 
 /* ---------- AI notes (summary images) ---------- */
@@ -545,6 +594,10 @@ function openImageDialog({ topic, history, note: givenNote }) {
   const show = async (message = '') => {
     blob = await canvasBlob(cardCanvas(note, topic));
     body.innerHTML = `${message ? `<p class="muted small">${message}</p>` : ''}<img class="summary-img" alt="${esc(t('summary.alt', { topic: topic.name }))}" src="${URL.createObjectURL(blob)}">`;
+    if (note.imageId) {
+      const photo = await images.getImage(note.imageId).catch(() => null);
+      if (photo) body.insertAdjacentHTML('beforeend', `<p class="field-label photo-label">${t('aiNotes.yourPhoto')}</p><img class="user-photo" alt="${t('aiNotes.yourPhoto')}" src="${URL.createObjectURL(photo)}">`);
+    }
     actions.hidden = false;
     $('#sum-download', dialog).hidden = false;
     const file = new File([blob], fileName(), { type: 'image/png' });
@@ -597,6 +650,7 @@ function openImageDialog({ topic, history, note: givenNote }) {
   $('#sum-delete', dialog)?.addEventListener('click', () => {
     if (!confirm(t('summary.confirmDelete'))) return;
     store.deleteAiNote(note.id);
+    if (note.imageId) images.deleteImage(note.imageId).catch(() => {});
     close();
     toast(t('summary.deleted'));
     if (location.hash.startsWith('#/ai-notes')) aiNotesView();
@@ -640,6 +694,7 @@ function aiNotesView() {
           <span class="ai-note-text">
             <strong>${esc(n.card.title)}</strong>
             <small>${tp?.icon || ''} ${esc(tp?.name || '')} · ${t('aiNotes.count', { n: n.card.points.length })} · ${fmtDate(n.at)}</small>
+            ${n.imageId ? `<span class="badge">${t('aiNotes.photoBadge')}</span>` : ''}
             ${store.notesWithTitle(n.card.title).length ? `<span class="badge">${t('compare.badge')}</span>` : ''}
           </span>
         </button>`;
@@ -936,8 +991,9 @@ function settingsView() {
     });
     toast(t('toast.settingsSaved'));
   };
-  $('#export').onclick = () => {
-    const blob = new Blob([store.exportData()], { type: 'application/json' });
+  $('#export').onclick = async () => {
+    const ids = store.getAiNotes().map((n) => n.imageId).filter(Boolean);
+    const blob = new Blob([store.exportData(await images.exportImages(ids))], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `body-study-backup-${new Date().toISOString().slice(0, 10)}.json`;
@@ -948,8 +1004,9 @@ function settingsView() {
     const file = e.target.files[0];
     if (!file) return;
     try {
-      const n = store.importData(await file.text());
-      toast(t('toast.restored', { n }));
+      const { count, images: pictures } = store.importData(await file.text());
+      await images.importImages(pictures);
+      toast(t('toast.restored', { n: count }));
     } catch (err) {
       toast(t(err.message === 'not-backup' ? 'err.notBackup' : 'toast.badFile'));
     }
