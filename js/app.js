@@ -4,6 +4,7 @@ import { PROVIDERS, claudeModels, geminiModels, hasApiKey, listGeminiModels, ask
 import { LANGUAGES, t, getLang, locale } from './i18n.js';
 import { drawCard } from './card.js';
 import * as images from './images.js';
+import * as sync from './sync.js';
 import { STYLE_IDS, LENGTH_IDS, styleInfo, lengthInfo, tutorSettings } from './tutor.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -888,10 +889,37 @@ function matchPanel(note) {
     : `<section class="panel match"><p class="muted small">${t('note.makeAiHelp')}</p><button class="btn ghost block" id="make-ai" type="button">${t('note.makeAi')}</button></section>`;
 }
 
+// One line describing the sync state, e.g. "Synced 14:02" or the error.
+function syncStateText(st = sync.getStatus()) {
+  if (st.state === 'off') return t('sync.state.off');
+  if (st.state === 'syncing') return t('sync.state.syncing');
+  if (st.state === 'error') {
+    const code = st.error?.code || 'other';
+    return t('sync.state.error', { msg: t(`sync.err.${code}`, { status: st.error?.status ?? '' }) });
+  }
+  return st.lastSync
+    ? t('sync.state.idle', { time: new Date(st.lastSync).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' }) })
+    : t('sync.state.never');
+}
+
+function showSyncStatus(st = sync.getStatus()) {
+  const dot = $('#sync-dot');
+  dot.hidden = st.state === 'off';
+  dot.dataset.state = st.state;
+  dot.title = syncStateText(st);
+  dot.setAttribute('aria-label', dot.title);
+  const line = $('#sync-state');
+  if (line) {
+    line.textContent = syncStateText(st);
+    line.dataset.state = st.state;
+  }
+}
+
 function settingsView() {
   setTitle(t('settings.title'));
   setTab('settings');
   const s = store.getSettings();
+  const sc = store.getSyncConfig();
   const lang = getLang();
   view.innerHTML = `
     <section class="panel">
@@ -932,6 +960,29 @@ function settingsView() {
       <button class="btn block" id="save">${t('settings.save')}</button>
     </section>
 
+    <section class="panel" id="sync-panel">
+      <div class="row">
+        <h3>${t('sync.title')}</h3>
+        <span class="sync-state" id="sync-state"></span>
+      </div>
+      <p class="muted small">${t('sync.intro')}</p>
+      ${sc.token ? `
+      <p class="small">${t('sync.connectedTo', { repo: `<b>${esc(sc.repo)}</b>` })}</p>
+      <div class="actions">
+        <button class="btn" id="sync-now">${t('sync.now')}</button>
+        <button class="btn danger" id="sync-off">${t('sync.disconnect')}</button>
+      </div>` : `
+      <div class="muted small steps">${t('sync.steps')}</div>
+      <label>${t('sync.repo')}
+        <input id="sync-repo" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="jimmyhsu0922/bodywise-data" value="${esc(sc.repo)}">
+      </label>
+      <label>${t('sync.token')}
+        <input id="sync-token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…">
+      </label>
+      <p class="muted small">${t('sync.privacy')}</p>
+      <button class="btn block" id="sync-connect">${t('sync.connect')}</button>`}
+    </section>
+
     <section class="panel">
       <h3>${t('settings.backup')}</h3>
       <p class="muted small">${t('settings.backupHelp')}</p>
@@ -954,6 +1005,29 @@ function settingsView() {
     applyLanguage();
     settingsView();
   }));
+
+  $('#sync-connect')?.addEventListener('click', async (e) => {
+    const repo = $('#sync-repo').value;
+    const token = $('#sync-token').value;
+    if (!repo.trim() || !token.trim()) { toast(t('sync.needBoth')); return; }
+    e.target.disabled = true;
+    try {
+      await sync.connect(repo, token);
+      toast(t('sync.connected'));
+      settingsView();
+    } catch (err) {
+      const code = err.code || 'other';
+      toast(t(`sync.err.${code}`, { status: err.status ?? '' }));
+      e.target.disabled = false;
+    }
+  });
+  $('#sync-now')?.addEventListener('click', () => sync.syncNow());
+  $('#sync-off')?.addEventListener('click', () => {
+    if (!confirm(t('sync.confirmDisconnect'))) return;
+    sync.disconnect();
+    settingsView();
+  });
+  showSyncStatus();
 
   const providerSel = $('#provider');
   const showProvider = () => {
@@ -1056,3 +1130,17 @@ store.requestPersistence();
 applyLanguage();
 window.addEventListener('hashchange', route);
 route();
+
+// Cloud sync: when another device's changes arrive, refresh the screen unless
+// the student is in the middle of writing or waiting for the AI.
+sync.onStatus(showSyncStatus);
+showSyncStatus();
+sync.init({
+  onRemoteChange: () => {
+    applyLanguage();
+    const busy = activeRequest || document.querySelector('dialog[open]') || location.hash.startsWith('#/note/')
+      || (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName));
+    if (!busy) route();
+    toast(t('sync.updated'));
+  },
+});

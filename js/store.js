@@ -1,12 +1,18 @@
-// Everything is saved on this device (localStorage). Nothing is uploaded except
-// what you send to the AI.
+// Everything is saved on this device (localStorage). With cloud sync turned
+// on (Settings), the same data is also kept in the student's own private
+// GitHub repository so every device shares it; see sync.js.
 const KEYS = {
   notes: 'bs.notes',
   chats: 'bs.chats',
+  chatsAt: 'bs.chatsAt', // { topicId: last change time }
   settings: 'bs.settings',
+  prefsAt: 'bs.prefsAt', // { setting: last change time } for the synced settings
   done: 'bs.done',
+  doneAt: 'bs.doneAt', // { topicId: { done, at } }
   summaries: 'bs.summaries', // older versions; read once to migrate
   aiNotes: 'bs.aiNotes',
+  deleted: 'bs.deleted', // { id: { at, image? } } so deletions sync too
+  sync: 'bs.sync', // cloud sync setup for this device
 };
 
 function read(key, fallback) {
@@ -32,6 +38,17 @@ export function requestPersistence() {
   try { navigator.storage?.persist?.(); } catch { /* not supported */ }
 }
 
+/* ---------- Change listeners (cloud sync) ---------- */
+const listeners = new Set();
+export function onChange(fn) { listeners.add(fn); }
+function changed() { listeners.forEach((fn) => fn()); }
+
+function markDeleted(id, extra = {}) {
+  const deleted = read(KEYS.deleted, {});
+  deleted[id] = { at: Date.now(), ...extra };
+  write(KEYS.deleted, deleted);
+}
+
 /* ---------- Settings ---------- */
 const DEFAULT_SETTINGS = {
   lang: '', // '' = follow the phone's language
@@ -45,12 +62,30 @@ const DEFAULT_SETTINGS = {
   tutorCustom: '',
 };
 
+// Settings shared between devices. API keys are not: each device keeps its own.
+export const SYNCED_PREFS = ['lang', 'provider', 'model', 'geminiModel', 'tutorStyle', 'tutorLength', 'tutorCustom'];
+
 export function getSettings() {
   return { ...DEFAULT_SETTINGS, ...read(KEYS.settings, {}) };
 }
 
 export function saveSettings(patch) {
-  return write(KEYS.settings, { ...getSettings(), ...patch });
+  const before = getSettings();
+  const ok = write(KEYS.settings, { ...before, ...patch });
+  const edited = SYNCED_PREFS.filter((k) => k in patch && patch[k] !== before[k]);
+  if (edited.length) {
+    const at = prefsAt();
+    for (const k of edited) at[k] = Date.now();
+    write(KEYS.prefsAt, at);
+    changed();
+  }
+  return ok;
+}
+
+// When each synced setting was last changed here (0 = never: a default).
+function prefsAt() {
+  const at = read(KEYS.prefsAt, {});
+  return typeof at === 'number' ? Object.fromEntries(SYNCED_PREFS.map((k) => [k, at])) : at;
 }
 
 /* ---------- Notes ---------- */
@@ -72,11 +107,14 @@ export function saveNote(note) {
     notes.push({ id: crypto.randomUUID?.() || String(now), createdAt: now, updatedAt: now, ...note });
   }
   write(KEYS.notes, notes);
+  changed();
   return i >= 0 ? notes[i] : notes[notes.length - 1];
 }
 
 export function deleteNote(id) {
   write(KEYS.notes, read(KEYS.notes, []).filter((n) => n.id !== id));
+  markDeleted(id);
+  changed();
 }
 
 /* ---------- Chat history (one conversation per topic) ---------- */
@@ -88,10 +126,14 @@ export function saveChat(topicId, messages) {
   const chats = read(KEYS.chats, {});
   chats[topicId] = messages;
   write(KEYS.chats, chats);
+  const at = read(KEYS.chatsAt, {});
+  at[topicId] = Date.now();
+  write(KEYS.chatsAt, at);
+  changed();
 }
 
 /* ---------- AI notes (generated images; we keep the card text) ---------- */
-// Each: { id, topic, card, at, chatLength, lang }
+// Each: { id, topic, card, at, chatLength, lang, source?, imageId? }
 export function getAiNotes() {
   let notes = read(KEYS.aiNotes, null);
   if (!notes) {
@@ -129,11 +171,15 @@ export function notesWithTitle(title) {
 export function addAiNote(note) {
   const full = { id: crypto.randomUUID?.() || String(Date.now()), ...note };
   write(KEYS.aiNotes, [full, ...getAiNotes()]);
+  changed();
   return full;
 }
 
 export function deleteAiNote(id) {
+  const note = getAiNote(id);
   write(KEYS.aiNotes, getAiNotes().filter((n) => n.id !== id));
+  markDeleted(id, note?.imageId ? { image: note.imageId } : {});
+  changed();
 }
 
 /* ---------- Topics marked as learned ---------- */
@@ -145,7 +191,51 @@ export function toggleDone(topicId) {
   const done = getDone();
   const next = done.includes(topicId) ? done.filter((d) => d !== topicId) : [...done, topicId];
   write(KEYS.done, next);
+  const at = read(KEYS.doneAt, {});
+  at[topicId] = { done: next.includes(topicId), at: Date.now() };
+  write(KEYS.doneAt, at);
+  changed();
   return next.includes(topicId);
+}
+
+/* ---------- Cloud sync ---------- */
+export function getSyncConfig() {
+  return { repo: '', token: '', lastSync: 0, ...read(KEYS.sync, {}) };
+}
+
+export function saveSyncConfig(patch) {
+  write(KEYS.sync, { ...getSyncConfig(), ...patch });
+}
+
+// Everything that is shared between devices, with the times needed to merge.
+export function snapshot() {
+  const settings = getSettings();
+  const known = getDone();
+  const doneAt = read(KEYS.doneAt, {});
+  for (const id of known) doneAt[id] ??= { done: true, at: 0 };
+  return {
+    notes: read(KEYS.notes, []),
+    aiNotes: getAiNotes(),
+    chats: read(KEYS.chats, {}),
+    chatsAt: read(KEYS.chatsAt, {}),
+    done: doneAt,
+    prefs: Object.fromEntries(SYNCED_PREFS.map((k) => [k, settings[k]])),
+    prefsAt: prefsAt(),
+    deleted: read(KEYS.deleted, {}),
+  };
+}
+
+// Replaces the shared data with a merged snapshot (doesn't count as a change).
+export function applySnapshot(s) {
+  write(KEYS.notes, s.notes);
+  write(KEYS.aiNotes, s.aiNotes);
+  write(KEYS.chats, s.chats);
+  write(KEYS.chatsAt, s.chatsAt);
+  write(KEYS.doneAt, s.done);
+  write(KEYS.done, Object.entries(s.done).filter(([, v]) => v.done).map(([id]) => id));
+  write(KEYS.settings, { ...getSettings(), ...s.prefs });
+  write(KEYS.prefsAt, s.prefsAt);
+  write(KEYS.deleted, s.deleted);
 }
 
 /* ---------- Backup ---------- */
@@ -178,5 +268,6 @@ export function importData(text) {
   for (const n of data.aiNotes || []) if (!aiById.has(n.id)) aiById.set(n.id, n);
   write(KEYS.aiNotes, [...aiById.values()]);
   write(KEYS.done, [...new Set([...getDone(), ...(data.done || [])])]);
+  changed();
   return { count: data.notes.length, images: data.images || {} };
 }

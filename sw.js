@@ -16,6 +16,7 @@ const SHELL = [
   'js/card.js',
   'js/tutor.js',
   'js/images.js',
+  'js/sync.js',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/apple-touch-icon.png',

@@ -8,6 +8,7 @@ A phone-installable web app (PWA) for learning the human body.
 - **AI Tutor** — chat with Claude or Gemini about each topic; it can explain, give examples, and quiz you. It also reads your notes for that topic, so it can correct mistakes.
 - **What I learned** — write what you understand in your own words. Notes are saved on your phone. Tap **Check my understanding** and the AI marks what's right, what to fix, what's missing, and gives a score.
 - **Generate image / AI Notes** — under each chat, **Generate image** turns the questions you asked into one summary image (each question with its answer). Every image is saved in the **AI Notes** tab, where you can view, download, share, or delete it.
+- **Cloud sync** — phone and computer share the same notes through your own private GitHub repository (see below).
 - **Backup** — download or restore your notes as a JSON file (Settings).
 - **Language** — English or 繁體中文 (Settings → Language). The topics, screens, and AI replies all follow the chosen language. The first time it opens, the app picks the phone's language.
 
@@ -41,4 +42,16 @@ Keys are stored only on your device and sent only to the provider you pick. Don'
 
 ## Where your data lives
 
-Notes, chats, and progress are saved in the browser's storage on your phone. Clearing the browser's site data deletes them, so download a backup now and then.
+Notes, chats, AI notes, and progress are saved in the browser on each device (pictures in IndexedDB).
+
+### Cloud sync (phone + computer share the same notes)
+
+Turn it on in **Settings → Cloud sync**. Your data is kept in **your own private GitHub repository**:
+
+1. On GitHub, create a **private** repository, e.g. `bodywise-data`.
+2. [Create a fine-grained token](https://github.com/settings/personal-access-tokens/new): *Repository access* → *Only select repositories* → that repository; *Permissions* → **Contents: Read and write**.
+3. In the app on each device, enter `owner/name` and the token, then tap **Connect & sync**.
+
+The app then syncs when it opens, every 2 minutes while open, and a few seconds after each change. It stores `bodywise-data.json` and an `images/` folder in that repository. Edits merge per note (newest wins), and deletions sync too. API keys are **not** synced; enter them on each device. Public repositories are refused, so your notes are never exposed.
+
+Without sync, clearing the browser's site data deletes everything on that device, so download a backup now and then.
