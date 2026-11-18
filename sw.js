@@ -1,27 +1,23 @@
 /*
- * Service Worker: network first, cache as fallback, so the app opens offline
- * (notes still work; the AI tutor needs internet). AI requests are never cached.
+ * Service Worker: network first, cache as fallback, so the app opens offline.
+ * Requests to other sites (GitHub sync, fonts) are left to the browser.
  */
-const CACHE = 'body-study-v2';
+const CACHE = 'body-study-v3';
 const SHELL = [
   './',
   'index.html',
   'manifest.webmanifest',
   'css/style.css',
   'js/app.js',
-  'js/ai.js',
   'js/store.js',
   'js/topics.js',
   'js/i18n.js',
-  'js/card.js',
-  'js/tutor.js',
   'js/images.js',
   'js/sync.js',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/apple-touch-icon.png',
 ];
-const SDK = 'https://cdn.jsdelivr.net/';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -44,12 +40,11 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   const sameOrigin = url.origin === self.location.origin;
-  // Cache our own files and the AI SDK library (version-pinned, never changes).
-  if (!sameOrigin && !request.url.startsWith(SDK)) return;
+  if (!sameOrigin) return;
 
   // Always ask the server whether our own files changed ('no-cache' revalidates),
   // so after an update the app never mixes old and new files.
-  const fresh = sameOrigin ? fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' }) : fetch(request);
+  const fresh = fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' });
   event.respondWith(
     fresh
       .then((res) => {

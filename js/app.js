@@ -1,49 +1,19 @@
 import { topics, generalTopic, getTopic } from './topics.js';
 import * as store from './store.js';
-import { PROVIDERS, claudeModels, geminiModels, hasApiKey, listGeminiModels, askTutor, checkNote, summarizeChat, writeAiNote, friendlyError } from './ai.js';
-import { LANGUAGES, t, getLang, locale } from './i18n.js';
-import { drawCard } from './card.js';
 import * as images from './images.js';
 import * as sync from './sync.js';
-import { STYLE_IDS, LENGTH_IDS, styleInfo, lengthInfo, tutorSettings } from './tutor.js';
+import { LANGUAGES, t, getLang, locale } from './i18n.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
-let activeRequest = null; // AbortController for the AI reply in progress
+const MAX_IMAGES = 20;
 
 /* ---------- Helpers ---------- */
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// Small, safe Markdown subset for AI replies: headings, lists, bold, italics, code.
-function md(text) {
-  const inline = (s) => esc(s)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, '$1<em>$2</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>');
-  const out = [];
-  let list = null;
-  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
-  for (const line of String(text).split('\n')) {
-    let m;
-    if ((m = line.match(/^\s*[-*•]\s+(.*)/))) {
-      if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; }
-      out.push(`<li>${inline(m[1])}</li>`);
-    } else if ((m = line.match(/^\s*\d+[.)]\s+(.*)/))) {
-      if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; }
-      out.push(`<li>${inline(m[1])}</li>`);
-    } else if ((m = line.match(/^#{1,4}\s+(.*)/))) {
-      closeList(); out.push(`<h4>${inline(m[1])}</h4>`);
-    } else if (line.trim()) {
-      closeList(); out.push(`<p>${inline(line)}</p>`);
-    } else {
-      closeList();
-    }
-  }
-  closeList();
-  return out.join('');
-}
+const multiline = (s) => esc(s).replace(/\n/g, '<br>');
 
 function fmtDate(ts) {
   return new Date(ts).toLocaleDateString(locale(), { month: 'short', day: 'numeric', year: 'numeric' });
@@ -75,45 +45,56 @@ function applyLanguage() {
   $('#back').setAttribute('aria-label', t('nav.back'));
 }
 
-// "Thinking…" with animated dots; after a few seconds it also shows how long.
-function thinkingHtml(startedAt) {
-  const secs = Math.floor((Date.now() - startedAt) / 1000);
-  const label = secs >= 5 ? t('thinking.long', { s: secs }) : t('thinking.label');
-  return `<span class="thinking"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>${esc(label)}</span>`;
-}
-
-function stopRequest() {
-  activeRequest?.abort();
-  activeRequest = null;
-}
-
 function topicOptions(selected) {
   return [generalTopic(), ...topics()]
     .map((tp) => `<option value="${tp.id}" ${tp.id === selected ? 'selected' : ''}>${tp.icon} ${esc(tp.name)}</option>`)
     .join('');
 }
 
-/* ---------- Views ---------- */
+// A modal sheet; the <dialog> is removed from the page when it closes.
+function openSheet(title, bodyHtml, actionsHtml = '') {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'sheet';
+  dialog.innerHTML = `
+    <div class="sheet-head">
+      <h3>${title}</h3>
+      <button class="link" data-close>${t('img.close')}</button>
+    </div>
+    <div class="sheet-body">${bodyHtml}</div>
+    ${actionsHtml ? `<div class="actions">${actionsHtml}</div>` : ''}`;
+  document.body.append(dialog);
+  dialog.addEventListener('close', () => dialog.remove());
+  $('[data-close]', dialog).onclick = () => dialog.close();
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+  dialog.showModal();
+  return dialog;
+}
+
+// Fills an <img> with a stored picture once it has loaded from IndexedDB.
+async function showPicture(img, imageId) {
+  const blob = await images.getImage(imageId).catch(() => null);
+  if (blob && img.isConnected) img.src = URL.createObjectURL(blob);
+}
+
+/* ---------- Home ---------- */
 function homeView() {
   setTitle('Body Study');
   setTab('learn');
   const all = topics();
   const general = generalTopic();
   const done = store.getDone();
-  const notes = store.getNotes();
   view.innerHTML = `
     <section class="hero">
       <div>
         <p class="eyebrow">${t('home.progress')}</p>
         <p class="big">${done.length}<span>${t('home.topicsLearned', { total: all.length })}</span></p>
-        <p class="muted">${t('home.notesWritten', { n: notes.length })}</p>
+        <p class="muted">${t('home.notesWritten', { n: store.getNotes().length })} · ${t('home.imageNotes', { n: store.getImageNotes().length })}</p>
       </div>
       <div class="ring" style="--p:${(done.length / all.length) * 100}"></div>
     </section>
-    ${hasApiKey() ? '' : `<a class="banner" href="#/settings">${t('home.keyBanner')}</a>`}
     <a class="card wide" href="#/topic/general" style="--c:${general.color}">
       <span class="icon">${general.icon}</span>
-      <span><strong>${esc(general.name)}</strong><small>${t('home.askSub')}</small></span>
+      <span><strong>${esc(general.name)}</strong><small>${t('home.generalSub')}</small></span>
     </a>
     <h2 class="section">${t('home.systems')}</h2>
     <div class="grid">
@@ -126,148 +107,43 @@ function homeView() {
     </div>`;
 }
 
+/* ---------- Topic ---------- */
 function topicView(id) {
   const topic = getTopic(id);
   if (!topic) return (location.hash = '#/');
   setTitle(topic.name, '#/');
   setTab('learn');
   const isGeneral = topic.id === 'general';
-  const topicNotes = store.getNotes().filter((n) => n.topic === topic.id);
+  const notes = store.getNotes().filter((n) => n.topic === topic.id);
+  const imageNotes = store.getImageNotes().filter((n) => n.topic === topic.id);
   const learned = store.getDone().includes(topic.id);
 
   view.innerHTML = `
-    ${isGeneral ? '' : `
     <section class="panel topic-head" style="--c:${topic.color}">
       <div class="topic-icon">${topic.icon}</div>
       <p>${esc(topic.overview)}</p>
+      ${isGeneral ? '' : `
       <h3>${t('topic.keyParts')}</h3>
       <div class="chips">${topic.parts.map((p) => `<span class="chip">${esc(p)}</span>`).join('')}</div>
       <h3>${t('topic.remember')}</h3>
-      <ul class="facts">${topic.facts.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>
-    </section>`}
-
-    <section class="panel">
-      <div class="row">
-        <button class="tutor-head" id="tutor-settings" aria-label="${t('tutor.open')}">
-          <h3>${t('topic.tutor')} <span class="gear">⚙️</span></h3>
-          <small id="tutor-summary">${esc(tutorSummary())}</small>
-        </button>
-        <button class="link" id="clear-chat">${t('topic.clearChat')}</button>
-      </div>
-      <div class="chat" id="chat"></div>
-      <div class="quick">
-        ${t(isGeneral ? 'topic.quickGeneral' : 'topic.quick')
-          .map((q) => `<button class="pill" data-q="${esc(q)}">${esc(q)}</button>`).join('')}
-      </div>
-      <form class="composer" id="ask">
-        <textarea id="q" rows="1" placeholder="${t('topic.ask')}" enterkeyhint="send"></textarea>
-        <button class="send" id="send" aria-label="${t('topic.send')}">➤</button>
-      </form>
-      <button class="btn ghost block summary-btn" id="summary">${t('summary.button')}</button>
-      <p class="muted small center">${t('summary.hint')}</p>
+      <ul class="facts">${topic.facts.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>`}
     </section>
 
     <section class="panel">
       <div class="row">
-        <h3>${t('topic.whatILearned')}</h3>
-        <a class="btn small" href="#/note/new?topic=${topic.id}">${t('topic.writeNote')}</a>
+        <h3>${t('topic.myNotes')}</h3>
+        <div class="row-actions">
+          <a class="btn small" href="#/note/new?topic=${topic.id}">${t('topic.addNote')}</a>
+          <a class="btn ghost small" href="#/image-note/new?topic=${topic.id}">${t('topic.addImageNote')}</a>
+        </div>
       </div>
-      ${topicNotes.length
-        ? `<div class="list">${topicNotes.map(noteItem).join('')}</div>`
-        : `<p class="muted">${t('topic.noNotes')}</p>`}
+      ${notes.length ? `<div class="list">${notes.map(noteItem).join('')}</div>` : ''}
+      ${imageNotes.length ? `<div class="gallery compact" id="topic-gallery">${imageNotes.map(imageNoteItem).join('')}</div>` : ''}
+      ${notes.length || imageNotes.length ? '' : `<p class="muted">${t('topic.noNotes')}</p>`}
       ${isGeneral ? '' : `<button class="btn ${learned ? 'ghost' : ''} block" id="done">${t(learned ? 'topic.isDone' : 'topic.markDone')}</button>`}
     </section>`;
 
-  const chatEl = $('#chat');
-  const input = $('#q');
-  const sendBtn = $('#send');
-  let messages = store.getChat(topic.id);
-
-  let startedAt = 0;
-  const render = (pendingText) => {
-    const items = messages.map((m) => bubble(m.role, m.content));
-    if (pendingText) items.push(bubble('assistant', pendingText, true));
-    else if (pendingText !== undefined) items.push(`<div class="msg assistant pending" role="status">${thinkingHtml(startedAt)}</div>`);
-    chatEl.innerHTML = items.join('') || `<p class="muted center">${t('topic.chatEmpty')}</p>`;
-    chatEl.scrollTop = chatEl.scrollHeight;
-  };
-  render();
-
-  async function send(text) {
-    text = text.trim();
-    if (!text) return;
-    if (activeRequest) return stopRequest();
-    if (!hasApiKey()) {
-      toast(t('toast.needKey'));
-      location.hash = '#/settings';
-      return;
-    }
-    input.value = '';
-    autoGrow(input);
-    messages = [...messages, { role: 'user', content: text }];
-    store.saveChat(topic.id, messages);
-    sendBtn.textContent = '■';
-    sendBtn.setAttribute('aria-label', t('topic.stop'));
-    const ctrl = new AbortController();
-    activeRequest = ctrl;
-    let partial = '';
-    startedAt = Date.now();
-    render('');
-    // Update the "thinking" seconds until the first words arrive.
-    const tick = setInterval(() => { if (!partial && activeRequest === ctrl && chatEl.isConnected) render(''); }, 1000);
-    try {
-      const reply = await askTutor({
-        topic,
-        notes: topicNotes,
-        history: apiHistory(messages),
-        signal: ctrl.signal,
-        onText: (txt) => { partial = txt; if (activeRequest === ctrl) render(txt); },
-      });
-      messages = [...messages, { role: 'assistant', content: reply }];
-    } catch (err) {
-      // Show the error in the chat, but keep it out of what is sent to the AI.
-      const note = `*${friendlyError(err)}*`;
-      messages = [...messages, partial
-        ? { role: 'assistant', content: `${partial}\n\n${note}` }
-        : { role: 'assistant', content: note, error: true }];
-    } finally {
-      clearInterval(tick);
-      if (activeRequest === ctrl) activeRequest = null;
-      store.saveChat(topic.id, messages);
-      if (chatEl.isConnected) {
-        render();
-        sendBtn.textContent = '➤';
-        sendBtn.setAttribute('aria-label', t('topic.send'));
-      }
-    }
-  }
-
-  $('#ask').onsubmit = (e) => {
-    e.preventDefault();
-    if (activeRequest) stopRequest();
-    else send(input.value);
-  };
-  input.addEventListener('input', () => autoGrow(input));
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && matchMedia('(pointer: fine)').matches) {
-      e.preventDefault();
-      send(input.value);
-    }
-  });
-  view.querySelectorAll('[data-q]').forEach((b) => (b.onclick = () => send(b.dataset.q)));
-  $('#clear-chat').onclick = () => {
-    if (!messages.length || !confirm(t('topic.confirmClear'))) return;
-    stopRequest();
-    messages = [];
-    store.saveChat(topic.id, messages);
-    render();
-  };
-  $('#tutor-settings').onclick = () => openTutorSettings(() => { $('#tutor-summary').textContent = tutorSummary(); });
-  $('#summary').onclick = () => {
-    if (activeRequest) return;
-    if (!messages.some((m) => m.role === 'user' && !m.error)) { toast(t('summary.needChat')); return; }
-    openImageDialog({ topic, history: apiHistory(messages) });
-  };
+  bindGallery($('#topic-gallery'));
   $('#done')?.addEventListener('click', () => {
     const now = store.toggleDone(topic.id);
     toast(t(now ? 'toast.markedDone' : 'toast.unmarked'));
@@ -275,626 +151,18 @@ function topicView(id) {
   });
 }
 
-/* ---------- AI tutor settings ---------- */
-function tutorSummary() {
-  const { style, length } = tutorSettings();
-  const name = style === 'custom' ? t('tutor.custom') : styleInfo(style).name;
-  return `${name} · ${lengthInfo(length).name}`;
-}
-
-// Type, answer length, and the prompt (preset or the student's own).
-function openTutorSettings(onSaved) {
-  const current = tutorSettings();
-  let style = current.style;
-  let length = current.length;
-  let custom = current.custom;
-
-  const dialog = document.createElement('dialog');
-  dialog.className = 'sheet';
-  dialog.innerHTML = `
-    <div class="sheet-head">
-      <h3>${t('tutor.title')}</h3>
-      <button class="link" id="ts-close">${t('summary.close')}</button>
-    </div>
-    <div class="sheet-body tutor-settings">
-      <p class="muted small">${t('tutor.appliesAll')}</p>
-      <h4>${t('tutor.length')}</h4>
-      <div class="segmented" role="radiogroup" aria-label="${t('tutor.length')}">
-        ${LENGTH_IDS.map((id) => `<button type="button" role="radio" data-length="${id}">${lengthInfo(id).name}</button>`).join('')}
-      </div>
-      <h4>${t('tutor.type')}</h4>
-      <div class="type-list" role="radiogroup" aria-label="${t('tutor.type')}">
-        ${[...STYLE_IDS, 'custom'].map((id) => {
-          const info = id === 'custom' ? { name: t('tutor.custom'), desc: t('tutor.customDesc') } : styleInfo(id);
-          return `<button type="button" role="radio" class="type-option" data-style="${id}"><strong>${esc(info.name)}</strong><small>${esc(info.desc)}</small></button>`;
-        }).join('')}
-      </div>
-      <h4>${t('tutor.prompt')}</h4>
-      <textarea id="ts-prompt" rows="8" placeholder="${t('tutor.promptPh')}"></textarea>
-      <button class="link" id="ts-template" type="button">${t('tutor.useAsTemplate')}</button>
-      <p class="muted small">${t('tutor.fixed')}</p>
-    </div>
-    <div class="actions">
-      <button class="btn ghost" id="ts-reset">${t('tutor.reset')}</button>
-      <button class="btn" id="ts-save">${t('tutor.save')}</button>
-    </div>`;
-  document.body.append(dialog);
-  const promptEl = $('#ts-prompt', dialog);
-
-  const render = () => {
-    dialog.querySelectorAll('[data-length]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.length === length)));
-    dialog.querySelectorAll('[data-style]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.style === style)));
-    const isCustom = style === 'custom';
-    promptEl.readOnly = !isCustom;
-    promptEl.classList.toggle('readonly', !isCustom);
-    promptEl.value = isCustom ? custom : styleInfo(style).prompt;
-    $('#ts-template', dialog).hidden = isCustom;
-  };
-
-  promptEl.addEventListener('input', () => { if (style === 'custom') custom = promptEl.value; });
-  dialog.querySelectorAll('[data-length]').forEach((b) => (b.onclick = () => { length = b.dataset.length; render(); }));
-  dialog.querySelectorAll('[data-style]').forEach((b) => (b.onclick = () => {
-    // Choosing Custom with nothing written yet starts from the type shown before.
-    if (b.dataset.style === 'custom' && !custom.trim() && style !== 'custom') custom = styleInfo(style).prompt;
-    style = b.dataset.style;
-    render();
-  }));
-  $('#ts-template', dialog).onclick = () => {
-    custom = styleInfo(style).prompt;
-    style = 'custom';
-    render();
-    promptEl.focus();
-  };
-  $('#ts-reset', dialog).onclick = () => { style = 'default'; length = 'medium'; render(); };
-  $('#ts-save', dialog).onclick = () => {
-    if (style === 'custom' && !custom.trim()) { toast(t('tutor.needCustom')); promptEl.focus(); return; }
-    store.saveSettings({ tutorStyle: style, tutorLength: length, tutorCustom: custom });
-    dialog.close();
-    toast(t('tutor.saved'));
-    onSaved?.();
-  };
-  $('#ts-close', dialog).onclick = () => dialog.close();
-  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
-  dialog.addEventListener('close', () => dialog.remove());
-
-  render();
-  dialog.showModal();
-}
-
-/* ---------- New AI note: two ways to make one ---------- */
-function modeSwitchHtml(active) {
-  return `<div class="segmented mode-switch" role="radiogroup">
-    ${[['ai', t('aiNotes.modeAi')], ['upload', t('aiNotes.modeUpload')]].map(([id, label]) =>
-      `<button type="button" role="radio" data-mode="${id}" aria-checked="${id === active}">${label}</button>`).join('')}
-  </div>`;
-}
-
-// Switching mode reopens the form in the other mode, keeping topic and title.
-function bindModeSwitch(dialog, active, current) {
-  dialog.querySelectorAll('[data-mode]').forEach((b) => (b.onclick = () => {
-    if (b.dataset.mode === active) return;
-    const prefill = current();
-    dialog.close();
-    (b.dataset.mode === 'upload' ? openUploadAiNote : openAddAiNote)(prefill);
-  }));
-}
-
-// Save the student's own images (screenshots of chats with other AIs,
-// pictures an AI made) as an AI note. No AI call.
-function openUploadAiNote(prefill = {}) {
-  const myNotes = store.getNotes().filter((n) => n.title);
-  const dialog = document.createElement('dialog');
-  dialog.className = 'sheet';
-  dialog.innerHTML = `
-    <div class="sheet-head">
-      <h3>${t('aiNotes.add')}</h3>
-      <button class="link" id="up-close">${t('summary.close')}</button>
-    </div>
-    ${modeSwitchHtml('upload')}
-    <div class="sheet-body add-ai">
-      <p class="muted small">${t('aiNotes.uploadHelp')}</p>
-      ${myNotes.length ? `
-      <label>${t('aiNotes.fromNote')}
-        <select id="up-from">
-          <option value="">${t('aiNotes.fromNoteNone')}</option>
-          ${myNotes.map((n) => `<option value="${esc(n.id)}">${esc(n.title)}</option>`).join('')}
-        </select>
-      </label>` : ''}
-      <label>${t('note.topic')}
-        <select id="up-topic">
-          <option value="">${t('note.choose')}</option>
-          ${topicOptions(prefill.topic || '')}
-        </select>
-      </label>
-      <label>${t('note.title')}
-        <input id="up-title" maxlength="120" placeholder="${t('note.titlePh')}" value="${esc(prefill.title || '')}">
-      </label>
-      <div class="photo-field">
-        <p class="field-label">${t('aiNotes.images')}</p>
-        <label class="btn ghost small photo-pick">${t('aiNotes.addImages')}<input id="up-files" type="file" accept="image/*" multiple hidden></label>
-        <div class="upload-grid" id="up-grid"></div>
-      </div>
-      <label>${t('aiNotes.caption')}
-        <textarea id="up-caption" rows="3" placeholder="${t('aiNotes.captionPh')}"></textarea>
-      </label>
-    </div>
-    <div class="actions">
-      <button class="btn block" id="up-save">${t('aiNotes.saveUpload')}</button>
-    </div>`;
-  document.body.append(dialog);
-  dialog.addEventListener('close', () => dialog.remove());
-  $('#up-close', dialog).onclick = () => dialog.close();
-  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
-  bindModeSwitch(dialog, 'upload', () => ({ topic: $('#up-topic', dialog).value, title: $('#up-title', dialog).value }));
-
-  $('#up-from', dialog)?.addEventListener('change', (e) => {
-    const n = store.getNote(e.target.value);
-    if (!n) return;
-    $('#up-title', dialog).value = n.title;
-    if (n.topic) $('#up-topic', dialog).value = n.topic;
-  });
-
-  let picked = []; // shrunk images: { blob }
-  const grid = $('#up-grid', dialog);
-  const drawGrid = () => {
-    grid.innerHTML = picked.map((p, i) => `
-      <div class="upload-thumb">
-        <img alt="" src="${URL.createObjectURL(p.blob)}">
-        <button type="button" data-remove="${i}" aria-label="${t('aiNotes.removeImage')}">×</button>
-      </div>`).join('');
-    grid.querySelectorAll('[data-remove]').forEach((b) => (b.onclick = () => {
-      picked.splice(Number(b.dataset.remove), 1);
-      drawGrid();
-    }));
-  };
-  $('#up-files', dialog).onchange = async (e) => {
-    const files = [...e.target.files];
-    e.target.value = '';
-    if (!files.length) return;
-    grid.insertAdjacentHTML('beforeend', `<p class="muted small" id="up-reading">${t('aiNotes.reading')}</p>`);
-    let bad = 0;
-    for (const file of files) {
-      if (picked.length >= 10) { toast(t('aiNotes.tooManyImages')); break; }
-      try { picked.push(await images.prepareImage(file, { keep: true })); } catch { bad++; }
-    }
-    if (bad) toast(t('aiNotes.badImages'));
-    drawGrid();
-  };
-
-  $('#up-save', dialog).onclick = async (e) => {
-    const topic = getTopic($('#up-topic', dialog).value);
-    const title = $('#up-title', dialog).value.trim();
-    if (!topic) { toast(t('aiNotes.needTopic')); return; }
-    if (!title) { toast(t('aiNotes.needTitle')); return; }
-    if (!picked.length) { toast(t('aiNotes.needImages')); return; }
-    e.target.disabled = true;
-    const ids = [];
-    for (const p of picked) {
-      const id = crypto.randomUUID?.() || `${Date.now()}-${ids.length}`;
-      await images.putImage(id, p.blob);
-      ids.push(id);
-    }
-    const note = store.addAiNote({
-      topic: topic.id, title, caption: $('#up-caption', dialog).value.trim(), images: ids,
-      at: Date.now(), lang: getLang(), source: 'upload',
-    });
-    dialog.close();
-    toast(t('summary.saved'));
-    if (location.hash.startsWith('#/ai-notes')) aiNotesView();
-    openImageDialog({ topic, note });
-  };
-
-  dialog.showModal();
-}
-
-/* ---------- New AI note (written by the student's request) ---------- */
-function openAddAiNote(prefill = {}) {
-  const myNotes = store.getNotes().filter((n) => n.title);
-  const dialog = document.createElement('dialog');
-  dialog.className = 'sheet';
-  dialog.innerHTML = `
-    <div class="sheet-head">
-      <h3>${t('aiNotes.add')}</h3>
-      <button class="link" id="an-close">${t('summary.close')}</button>
-    </div>
-    ${modeSwitchHtml('ai')}
-    <div class="sheet-body add-ai" id="an-body">
-      <p class="muted small">${t('aiNotes.addHelp')}</p>
-      ${myNotes.length ? `
-      <label>${t('aiNotes.fromNote')}
-        <select id="an-from">
-          <option value="">${t('aiNotes.fromNoteNone')}</option>
-          ${myNotes.map((n) => `<option value="${esc(n.id)}">${esc(n.title)}</option>`).join('')}
-        </select>
-      </label>` : ''}
-      <label>${t('note.topic')}
-        <select id="an-topic">
-          <option value="">${t('note.choose')}</option>
-          ${topicOptions(prefill.topic || '')}
-        </select>
-      </label>
-      <label>${t('note.title')}
-        <input id="an-title" maxlength="120" placeholder="${t('note.titlePh')}" value="${esc(prefill.title || '')}">
-      </label>
-      <div class="photo-field">
-        <p class="field-label">${t('aiNotes.photo')}</p>
-        <p class="muted small">${t('aiNotes.photoHelp')}</p>
-        <label class="btn ghost small photo-pick">${t('aiNotes.photoPick')}<input id="an-photo" type="file" accept="image/*" hidden></label>
-        <div class="photo-preview" id="an-preview" hidden>
-          <img alt="">
-          <button class="link" type="button" id="an-photo-remove">${t('aiNotes.photoRemove')}</button>
-        </div>
-        <p class="muted small" id="an-title-help" hidden>${t('aiNotes.titleHelp')}</p>
-      </div>
-      <label>${t('aiNotes.questions')}
-        <textarea id="an-questions" rows="4" placeholder="${t('aiNotes.questionsPh')}"></textarea>
-      </label>
-      <p class="muted small">${t('aiNotes.questionsHelp')}</p>
-    </div>
-    <div class="actions" id="an-actions">
-      <button class="btn block" id="an-go">${t('aiNotes.generate')}</button>
-    </div>`;
-  document.body.append(dialog);
-  const body = $('#an-body', dialog);
-  let ctrl = null;
-  const close = () => { ctrl?.abort(); dialog.close(); };
-  dialog.addEventListener('close', () => dialog.remove());
-  $('#an-close', dialog).onclick = close;
-  bindModeSwitch(dialog, 'ai', () => ({ topic: $('#an-topic', dialog)?.value, title: $('#an-title', dialog)?.value }));
-  dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
-
-  // The picture, shrunk and ready to send: { blob, mediaType, base64 }.
-  let photo = null;
-  const showPhoto = () => {
-    const preview = $('#an-preview', dialog);
-    preview.hidden = !photo;
-    $('#an-title-help', dialog).hidden = !photo;
-    if (photo) $('img', preview).src = URL.createObjectURL(photo.blob);
-  };
-  const bindForm = () => {
-    $('#an-from', dialog)?.addEventListener('change', (e) => {
-      const n = store.getNote(e.target.value);
-      if (!n) return;
-      $('#an-title', dialog).value = n.title;
-      if (n.topic) $('#an-topic', dialog).value = n.topic;
-    });
-    $('#an-photo', dialog).onchange = async (e) => {
-      const file = e.target.files[0];
-      e.target.value = '';
-      if (!file) return;
-      try {
-        photo = await images.prepareImage(file);
-      } catch {
-        photo = null;
-        toast(t('aiNotes.photoBad'));
-      }
-      showPhoto();
-    };
-    $('#an-photo-remove', dialog).onclick = () => { photo = null; showPhoto(); };
-    showPhoto();
-  };
-  bindForm();
-
-  $('#an-go', dialog).onclick = async () => {
-    const topic = getTopic($('#an-topic', dialog).value);
-    const title = $('#an-title', dialog).value.trim();
-    let questions = $('#an-questions', dialog).value.split('\n').map((q) => q.trim()).filter(Boolean);
-    if (!topic) { toast(t('aiNotes.needTopic')); return; }
-    if (!title && !photo) { toast(t('aiNotes.needTitleOrPhoto')); return; }
-    if (!hasApiKey()) { close(); toast(t('toast.needKey')); location.hash = '#/settings'; return; }
-    if (questions.length > 8) { toast(t('aiNotes.tooMany')); questions = questions.slice(0, 8); }
-
-    const form = body.innerHTML;
-    const values = { from: $('#an-from', dialog)?.value, topic: topic.id, title, q: $('#an-questions', dialog).value };
-    $('#an-actions', dialog).hidden = true;
-    body.innerHTML = `<div class="loading"><span class="spinner"></span><p class="muted">${t('summary.making')}</p><p id="an-wait"></p></div>`;
-    ctrl = new AbortController();
-    const startedAt = Date.now();
-    const showWait = () => { const el = $('#an-wait', dialog); if (el) el.innerHTML = thinkingHtml(startedAt); };
-    showWait();
-    const tick = setInterval(showWait, 1000);
-    try {
-      const card = await writeAiNote({ topic, title, questions, image: photo && { mediaType: photo.mediaType, base64: photo.base64 }, signal: ctrl.signal });
-      let imageId;
-      if (photo) {
-        imageId = crypto.randomUUID?.() || String(Date.now());
-        await images.putImage(imageId, photo.blob);
-      }
-      const note = store.addAiNote({ topic: topic.id, card, at: Date.now(), lang: getLang(), source: 'manual', imageId });
-      dialog.close();
-      toast(t('summary.saved'));
-      if (location.hash.startsWith('#/ai-notes')) aiNotesView();
-      openImageDialog({ topic, note });
-    } catch (err) {
-      if (!dialog.open) return;
-      // Show the error above the form, with what they typed kept.
-      body.innerHTML = `<p class="error">${esc(friendlyError(err))}</p>${form}`;
-      if (values.from && $('#an-from', dialog)) $('#an-from', dialog).value = values.from;
-      $('#an-topic', dialog).value = values.topic;
-      $('#an-title', dialog).value = values.title;
-      $('#an-questions', dialog).value = values.q;
-      bindForm();
-      $('#an-actions', dialog).hidden = false;
-    } finally {
-      clearInterval(tick);
-      ctrl = null;
-    }
-  };
-
-  dialog.showModal();
-}
-
-/* ---------- Compare my note with an AI note ---------- */
-function compareView(noteId, aiId) {
-  const note = store.getNote(noteId);
-  const ai = store.getAiNote(aiId);
-  setTitle(t('compare.title'), '#/notes');
-  setTab('notes');
-  if (!note || !ai) {
-    view.innerHTML = `<div class="empty"><p>⇄</p><p>${t('compare.missing')}</p></div>`;
-    return;
-  }
-  const topic = getTopic(ai.topic) || getTopic(note.topic) || generalTopic();
-  view.innerHTML = `
-    <section class="panel compare-head" style="--c:${topic.color}">
-      <p class="eyebrow">${topic.icon} ${esc(topic.name)}</p>
-      <h2>${esc(note.title)}</h2>
-      <p class="muted small">${t('compare.hint')}</p>
-    </section>
-    <div class="compare">
-      <section class="panel">
-        <div class="row">
-          <h3>${t('compare.mine')}</h3>
-          ${note.score ? `<b class="score">${esc(note.score)}</b>` : ''}
-        </div>
-        <div class="compare-text">${note.body ? esc(note.body).replace(/\n/g, '<br>') : `<span class="muted">${t('compare.empty')}</span>`}</div>
-        <p class="muted small">${fmtDate(note.updatedAt)}</p>
-        <a class="btn ghost small" href="#/note/${note.id}">${t('compare.edit')}</a>
-      </section>
-      <section class="panel">
-        <div class="row"><h3>${t('compare.ai')}</h3></div>
-        ${ai.card ? `
-        <ol class="compare-points">
-          ${ai.card.points.map((p) => `<li><strong>${esc(p.emoji)} ${esc(p.question)}</strong><span>${esc(p.answer)}</span></li>`).join('')}
-        </ol>
-        <p class="takeaway">💡 ${esc(ai.card.takeaway)}</p>` : `${ai.caption ? `<p class="caption">${esc(ai.caption)}</p>` : ''}`}
-        <div id="cmp-photo"></div>
-        <p class="muted small">${fmtDate(ai.at)}</p>
-        <button class="btn ghost small" id="cmp-image">${t('compare.viewImage')}</button>
-      </section>
-    </div>`;
-  $('#cmp-image').onclick = () => openImageDialog({ topic, note: ai });
-  Promise.all(store.aiImageIds(ai).map((id) => images.getImage(id).catch(() => null))).then((pictures) => {
-    const el = $('#cmp-photo');
-    if (!el) return;
-    const shown = pictures.filter(Boolean);
-    el.innerHTML = (shown.length && ai.card ? `<p class="field-label photo-label">${t('aiNotes.yourPhoto')}</p>` : '')
-      + shown.map((p) => `<img class="user-photo" alt="" src="${URL.createObjectURL(p)}">`).join('');
-  });
-}
-
-/* ---------- AI notes (summary images) ---------- */
-const aiTitleOf = store.aiTitle;
-
-function cardCanvas(note, topic) {
-  return drawCard(note.card, {
-    color: topic.color,
-    icon: topic.icon,
-    topicName: topic.name,
-    takeawayLabel: t('summary.takeaway'),
-    footer: t('summary.footer'),
-    date: new Date(note.at).toLocaleDateString(locale()),
-  });
-}
-
-const canvasBlob = (canvas) => new Promise((r) => canvas.toBlob(r, 'image/png'));
-
-// The image window. With `history` it belongs to a chat: it shows the newest
-// image if the chat hasn't changed since, or asks the AI for a new one.
-// With `note` it shows a saved AI note from the gallery.
-function openImageDialog({ topic, history, note: givenNote }) {
-  const fromChat = Boolean(history);
-  let note = fromChat ? store.latestAiNote(topic.id) : givenNote;
-
-  const dialog = document.createElement('dialog');
-  dialog.className = 'sheet';
-  dialog.innerHTML = `
-    <div class="sheet-head">
-      <h3>${givenNote ? esc(aiTitleOf(givenNote)) : t('summary.title')}</h3>
-      <button class="link" id="sum-close">${t('summary.close')}</button>
-    </div>
-    <div class="sheet-body" id="sum-body"></div>
-    <div class="actions" id="sum-actions" hidden>
-      <button class="btn" id="sum-download">${t('summary.download')}</button>
-      <button class="btn ghost" id="sum-share" hidden>${t('summary.share')}</button>
-      ${fromChat
-        ? `<button class="btn ghost" id="sum-redo">${t('summary.redo')}</button>`
-        : `<button class="btn danger" id="sum-delete">${t('summary.delete')}</button>`}
-    </div>
-    <button class="btn ghost block" id="sum-compare" hidden>${t('compare.withNote')}</button>`;
-  document.body.append(dialog);
-  const body = $('#sum-body', dialog);
-  const actions = $('#sum-actions', dialog);
-  let ctrl = null;
-  let files = [];
-  const fileBase = () => `body-study-${topic.id}-${new Date(note?.at || Date.now()).toISOString().slice(0, 10)}`;
-
-  const close = () => { ctrl?.abort(); dialog.close(); };
-  dialog.addEventListener('close', () => dialog.remove());
-  $('#sum-close', dialog).onclick = close;
-  dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
-
-  const show = async (message = '') => {
-    // What Download/Share hand out: the AI's card, or the uploaded images.
-    files = [];
-    let html = message ? `<p class="muted small">${message}</p>` : '';
-    if (note.card) {
-      const blob = await canvasBlob(cardCanvas(note, topic));
-      files.push(new File([blob], `${fileBase()}.png`, { type: 'image/png' }));
-      html += `<img class="summary-img" alt="${esc(t('summary.alt', { topic: topic.name }))}" src="${URL.createObjectURL(blob)}">`;
-    } else {
-      html += `<h4 class="upload-title">${esc(aiTitleOf(note))}</h4>${note.caption ? `<p class="caption">${esc(note.caption)}</p>` : ''}`;
-    }
-    const pictures = await Promise.all(store.aiImageIds(note).map((id) => images.getImage(id).catch(() => null)));
-    pictures.forEach((photo, i) => {
-      if (!photo) return;
-      if (!note.card) files.push(new File([photo], `${fileBase()}-${i + 1}.jpg`, { type: 'image/jpeg' }));
-      const label = note.card && i === 0 ? `<p class="field-label photo-label">${t('aiNotes.yourPhoto')}</p>` : '';
-      html += `${label}<img class="user-photo" alt="" src="${URL.createObjectURL(photo)}">`;
-    });
-    body.innerHTML = html;
-    actions.hidden = false;
-    $('#sum-download', dialog).hidden = !files.length;
-    $('#sum-share', dialog).hidden = !(files.length && navigator.canShare && navigator.canShare({ files }));
-    const match = store.notesWithTitle(aiTitleOf(note))[0];
-    const cmp = $('#sum-compare', dialog);
-    cmp.hidden = !match;
-    if (match) cmp.onclick = () => { dialog.close(); location.hash = `#/compare/${match.id}/${note.id}`; };
-  };
-
-  const generate = async () => {
-    if (!hasApiKey()) { close(); toast(t('toast.needKey')); location.hash = '#/settings'; return; }
-    actions.hidden = true;
-    body.innerHTML = `<div class="loading"><span class="spinner"></span><p class="muted">${t('summary.making')}</p><p id="sum-wait"></p></div>`;
-    ctrl = new AbortController();
-    const startedAt = Date.now();
-    const showWait = () => { const el = $('#sum-wait', dialog); if (el) el.innerHTML = thinkingHtml(startedAt); };
-    showWait();
-    const tick = setInterval(showWait, 1000);
-    try {
-      const card = await summarizeChat({ topic, history, signal: ctrl.signal });
-      note = store.addAiNote({ topic: topic.id, card, at: Date.now(), chatLength: history.length, lang: getLang() });
-      await show(t('summary.saved'));
-    } catch (err) {
-      if (!dialog.open) return;
-      body.innerHTML = `<p class="error">${esc(friendlyError(err))}</p>`;
-      actions.hidden = false;
-      $('#sum-download', dialog).hidden = true;
-      $('#sum-share', dialog).hidden = true;
-    } finally {
-      clearInterval(tick);
-      ctrl = null;
-    }
-  };
-
-  $('#sum-download', dialog).onclick = () => {
-    files.forEach((file, i) => setTimeout(() => {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(file);
-      a.download = file.name;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    }, i * 300)); // a short gap so the browser allows several downloads
-  };
-  $('#sum-share', dialog).onclick = async () => {
-    try {
-      await navigator.share({ files, title: aiTitleOf(note) });
-    } catch { /* cancelled */ }
-  };
-  $('#sum-redo', dialog)?.addEventListener('click', generate);
-  $('#sum-delete', dialog)?.addEventListener('click', () => {
-    if (!confirm(t('summary.confirmDelete'))) return;
-    store.deleteAiNote(note.id);
-    store.aiImageIds(note).forEach((id) => images.deleteImage(id).catch(() => {}));
-    close();
-    toast(t('summary.deleted'));
-    if (location.hash.startsWith('#/ai-notes')) aiNotesView();
-  });
-
-  dialog.showModal();
-  if (!fromChat) show();
-  else if (note && note.lang === getLang() && note.chatLength === history.length) show();
-  else if (note && note.lang === getLang()) show(t('summary.outdated'));
-  else generate();
-}
-
-function aiNotesView() {
-  setTitle(t('aiNotes.title'));
-  setTab('ai-notes');
-  const all = store.getAiNotes();
-  view.innerHTML = `
-    <div class="toolbar">
-      <select id="ai-filter" aria-label="${t('notes.filter')}">
-        <option value="">${t('notes.allTopics')}</option>
-        ${topicOptions('')}
-      </select>
-    </div>
-    <div class="gallery" id="gallery"></div>
-    <button class="fab" id="add-ai" aria-label="${t('aiNotes.add')}">＋</button>`;
-  $('#add-ai').onclick = () => openAddAiNote({ topic: $('#ai-filter').value });
-
-  const draw = () => {
-    const f = $('#ai-filter').value;
-    const list = all.filter((n) => !f || n.topic === f);
-    const gallery = $('#gallery');
-    if (!list.length) {
-      gallery.innerHTML = `<div class="empty"><p>🖼️</p><p>${t(all.length ? 'notes.noMatch' : 'aiNotes.empty')}</p></div>`;
-      return;
-    }
-    gallery.innerHTML = list.map((n) => {
-      const tp = getTopic(n.topic);
-      return `
-        <button class="ai-note" data-id="${esc(n.id)}" style="--c:${tp?.color || '#888'}">
-          <span class="thumb"><img alt="" data-thumb="${esc(n.id)}"></span>
-          <span class="ai-note-text">
-            <strong>${esc(aiTitleOf(n))}</strong>
-            <small>${tp?.icon || ''} ${esc(tp?.name || '')} · ${n.card ? t('aiNotes.count', { n: n.card.points.length }) : t('aiNotes.imageCount', { n: store.aiImageIds(n).length })} · ${fmtDate(n.at)}</small>
-            ${n.source === 'upload' ? `<span class="badge">${t('aiNotes.uploadedBadge')}</span>` : n.imageId ? `<span class="badge">${t('aiNotes.photoBadge')}</span>` : ''}
-            ${store.notesWithTitle(aiTitleOf(n)).length ? `<span class="badge">${t('compare.badge')}</span>` : ''}
-          </span>
-        </button>`;
-    }).join('');
-    // Draw thumbnails after the list is on screen.
-    list.forEach(async (n) => {
-      const tp = getTopic(n.topic);
-      const img = gallery.querySelector(`[data-thumb="${CSS.escape(n.id)}"]`);
-      if (!tp || !img) return;
-      const blob = n.card
-        ? await canvasBlob(cardCanvas(n, tp))
-        : await images.getImage(store.aiImageIds(n)[0]).catch(() => null);
-      if (blob) img.src = URL.createObjectURL(blob);
-    });
-    gallery.querySelectorAll('.ai-note').forEach((b) => (b.onclick = () => {
-      const n = store.getAiNote(b.dataset.id);
-      const tp = n && getTopic(n.topic);
-      if (tp) openImageDialog({ topic: tp, note: n });
-    }));
-  };
-  $('#ai-filter').onchange = draw;
-  draw();
-}
-
-// The last turns of the chat, minus failed questions, in user/assistant order.
-function apiHistory(messages) {
-  const out = [];
-  for (const m of messages) {
-    if (m.error) { if (out.at(-1)?.role === 'user') out.pop(); continue; }
-    if (out.at(-1)?.role === m.role) out.pop(); // e.g. a question asked again after a failure
-    out.push({ role: m.role, content: m.content });
-  }
-  const recent = out.slice(-30);
-  return recent[0]?.role === 'assistant' ? recent.slice(1) : recent;
-}
-
-function bubble(role, content, pending = false) {
-  return `<div class="msg ${role}${pending ? ' pending' : ''}">${role === 'user' ? esc(content).replace(/\n/g, '<br>') : md(content)}</div>`;
-}
-
-function autoGrow(el) {
-  el.style.height = 'auto';
-  el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
-}
-
+/* ---------- Notes ---------- */
 function noteItem(n) {
   const tp = getTopic(n.topic);
+  const match = store.imageNotesWithTitle(n.title).length;
   return `
     <a class="note-item" href="#/note/${n.id}">
       <span class="dot" style="--c:${tp?.color || '#888'}">${tp?.icon || '📝'}</span>
       <span class="grow">
-        <strong>${esc(n.title || t('note.untitled'))}${store.aiNotesWithTitle(n.title).length ? ` <span class="badge">${t('compare.badge')}</span>` : ''}</strong>
+        <strong>${esc(n.title || t('note.untitled'))}${match ? ` <span class="badge">${t('compare.badge')}</span>` : ''}</strong>
         <small>${esc((n.body || '').slice(0, 90))}</small>
       </span>
-      <span class="meta">${n.score ? `<b>${esc(n.score)}</b>` : ''}<small>${fmtDate(n.updatedAt)}</small></span>
+      <span class="meta"><small>${fmtDate(n.updatedAt)}</small></span>
     </a>`;
 }
 
@@ -929,7 +197,8 @@ function notesView() {
 function noteEditView(id, params) {
   const existing = id === 'new' ? null : store.getNote(id);
   if (id !== 'new' && !existing) return (location.hash = '#/notes');
-  let note = existing || { title: '', body: '', topic: params.get('topic') || '' };
+  const note = existing || { title: '', body: '', topic: params.get('topic') || '' };
+  let dirty = false;
   setTitle(t(existing ? 'note.editTitle' : 'note.newTitle'), '#/notes');
   setTab('notes');
 
@@ -945,97 +214,326 @@ function noteEditView(id, params) {
         <input id="title-in" maxlength="120" placeholder="${t('note.titlePh')}" value="${esc(note.title)}">
       </label>
       <label>${t('note.body')}
-        <textarea id="body" rows="10" placeholder="${t('note.bodyPh')}">${esc(note.body)}</textarea>
+        <textarea id="body" rows="12" placeholder="${t('note.bodyPh')}">${esc(note.body)}</textarea>
       </label>
-      <div class="actions">
-        <button class="btn" type="submit">${t('note.save')}</button>
-        <button class="btn ghost" type="button" id="check">${t('note.check')}</button>
-      </div>
+      <button class="btn block" type="submit">${t('note.save')}</button>
       ${existing ? `<p class="muted small">${t('note.lastSaved', { time: new Date(existing.updatedAt).toLocaleString(locale()) })}</p>` : ''}
     </form>
     ${existing?.title ? matchPanel(existing) : ''}
-    <section class="panel ${note.feedback ? '' : 'hidden'}" id="fb-panel">
-      <h3>${t('note.feedback')}</h3>
-      <div class="feedback" id="feedback">${note.feedback ? md(note.feedback) : ''}</div>
-    </section>
     ${existing ? `<button class="btn danger block" id="delete">${t('note.delete')}</button>` : ''}`;
 
-  const read = () => ({
-    ...note,
-    topic: $('#topic').value,
-    title: $('#title-in').value.trim(),
-    body: $('#body').value.trim(),
-  });
-
-  const persist = () => {
-    const data = read();
-    if (!data.body && !data.title) { toast(t('toast.writeFirst')); return null; }
-    note = store.saveNote(data);
-    if (id === 'new') { history.replaceState(null, '', `#/note/${note.id}`); id = note.id; }
-    return note;
-  };
-
+  $('#form').addEventListener('input', () => { dirty = true; });
   $('#form').onsubmit = (e) => {
     e.preventDefault();
-    if (!persist()) return;
+    const data = { ...note, topic: $('#topic').value, title: $('#title-in').value.trim(), body: $('#body').value.trim() };
+    if (!data.body && !data.title) { toast(t('toast.writeFirst')); return; }
+    store.saveNote(data);
+    dirty = false;
     toast(t('toast.saved'));
     // Back to the notes list; replace so Back doesn't reopen the editor.
     location.replace('#/notes');
   };
-
-  $('#check').onclick = async () => {
-    if (activeRequest) return stopRequest();
-    if (!hasApiKey()) { toast(t('toast.needKey')); location.hash = '#/settings'; return; }
-    if (read().body.length < 15) { toast(t('toast.writeMore')); return; }
-    if (!persist()) return;
-    const btn = $('#check');
-    const panel = $('#fb-panel');
-    const fb = $('#feedback');
-    panel.classList.remove('hidden');
-    btn.textContent = t('note.stop');
-    const ctrl = new AbortController();
-    activeRequest = ctrl;
-    const startedAt = Date.now();
-    let gotText = false;
-    const showThinking = () => { if (!gotText && fb.isConnected) fb.innerHTML = `<p class="muted">${t('note.reading')}</p><p>${thinkingHtml(startedAt)}</p>`; };
-    showThinking();
-    const tick = setInterval(showThinking, 1000);
-    try {
-      const text = await checkNote({
-        topic: getTopic(note.topic),
-        note,
-        signal: ctrl.signal,
-        onText: (txt) => { gotText = true; if (fb.isConnected) fb.innerHTML = md(txt); },
-      });
-      const score = text.match(/(?:Score|分數)\s*[:：]\**\s*(\d+(?:\.\d+)?\s*\/\s*10)/i)?.[1]?.replace(/\s/g, '');
-      note = store.saveNote({ ...note, feedback: text, score: score || note.score });
-      toast(t('toast.feedbackSaved'));
-    } catch (err) {
-      if (fb.isConnected) fb.innerHTML = `<p class="error">${esc(friendlyError(err))}</p>`;
-    } finally {
-      clearInterval(tick);
-      if (activeRequest === ctrl) activeRequest = null;
-      if (btn.isConnected) btn.textContent = t('note.check');
-    }
-  };
-
-  $('#make-ai')?.addEventListener('click', () => openAddAiNote({ topic: note.topic, title: note.title }));
   $('#delete')?.addEventListener('click', () => {
     if (!confirm(t('note.confirmDelete'))) return;
     store.deleteNote(note.id);
+    dirty = false;
     toast(t('toast.deleted'));
     location.hash = '#/notes';
   });
+  leaveGuard = () => !dirty || confirm(t('img.unsaved'));
 }
 
-// Under a saved note: compare with a same-titled AI note, or make one.
+// Under a saved note: compare with a same-titled image note, or make one.
 function matchPanel(note) {
-  const ai = store.aiNotesWithTitle(note.title)[0];
-  return ai
-    ? `<section class="panel match"><p>${t('note.matchFound')}</p><a class="btn block" href="#/compare/${note.id}/${ai.id}">${t('compare.withAi')}</a></section>`
-    : `<section class="panel match"><p class="muted small">${t('note.makeAiHelp')}</p><button class="btn ghost block" id="make-ai" type="button">${t('note.makeAi')}</button></section>`;
+  const img = store.imageNotesWithTitle(note.title)[0];
+  return img
+    ? `<section class="panel match"><p>${t('note.matchFound')}</p><a class="btn block" href="#/compare/${note.id}/${img.id}">${t('compare.withImage')}</a></section>`
+    : `<section class="panel match"><p class="muted small">${t('note.makeImageHelp')}</p><a class="btn ghost block" href="#/image-note/new?topic=${encodeURIComponent(note.topic || '')}&title=${encodeURIComponent(note.title)}">${t('note.makeImage')}</a></section>`;
 }
 
+/* ---------- Image notes ---------- */
+function imageNoteItem(n) {
+  const tp = getTopic(n.topic);
+  const ids = store.imageIdsOf(n);
+  return `
+    <button class="ai-note" data-id="${esc(n.id)}" style="--c:${tp?.color || '#888'}">
+      <span class="thumb">${ids.length
+        ? `<img alt="" data-picture="${esc(ids[0])}">`
+        : `<span class="thumb-text">${esc((n.caption || n.title).slice(0, 160))}</span>`}</span>
+      <span class="ai-note-text">
+        <strong>${esc(n.title || t('note.untitled'))}</strong>
+        <small>${tp?.icon || ''} ${esc(tp?.name || '')} · ${t('img.count', { n: ids.length })} · ${fmtDate(n.updatedAt || n.at)}</small>
+        ${store.notesWithTitle(n.title).length ? `<span class="badge">${t('compare.badge')}</span>` : ''}
+      </span>
+    </button>`;
+}
+
+function bindGallery(gallery) {
+  if (!gallery) return;
+  gallery.querySelectorAll('[data-picture]').forEach((img) => showPicture(img, img.dataset.picture));
+  gallery.querySelectorAll('.ai-note').forEach((b) => (b.onclick = () => {
+    const n = store.getImageNote(b.dataset.id);
+    if (n) openImageViewer(n);
+  }));
+}
+
+function imageNotesView() {
+  setTitle(t('img.title'));
+  setTab('image-notes');
+  const all = store.getImageNotes();
+  view.innerHTML = `
+    <div class="toolbar">
+      <input id="img-search" type="search" placeholder="${t('notes.search')}" aria-label="${t('notes.search')}">
+      <select id="img-filter" aria-label="${t('notes.filter')}">
+        <option value="">${t('notes.allTopics')}</option>
+        ${topicOptions('')}
+      </select>
+    </div>
+    <div class="gallery" id="gallery"></div>
+    <button class="fab" id="add-img" aria-label="${t('img.new')}">＋</button>`;
+  $('#add-img').onclick = () => { location.hash = `#/image-note/new?topic=${$('#img-filter').value}`; };
+
+  const draw = () => {
+    const q = $('#img-search').value.toLowerCase();
+    const f = $('#img-filter').value;
+    const list = all.filter((n) => (!f || n.topic === f) && (!q || `${n.title} ${n.caption}`.toLowerCase().includes(q)));
+    const gallery = $('#gallery');
+    gallery.innerHTML = list.length
+      ? list.map(imageNoteItem).join('')
+      : `<div class="empty"><p>🖼️</p><p>${t(all.length ? 'notes.noMatch' : 'img.empty')}</p></div>`;
+    bindGallery(gallery);
+  };
+  $('#img-search').oninput = draw;
+  $('#img-filter').onchange = draw;
+  draw();
+}
+
+// Looking at an image note: its pictures and description, with Edit,
+// Download, Share, and Compare.
+async function openImageViewer(note) {
+  const ids = store.imageIdsOf(note);
+  const match = store.notesWithTitle(note.title)[0];
+  const dialog = openSheet(
+    esc(note.title || t('note.untitled')),
+    `${note.caption ? `<p class="caption">${multiline(note.caption)}</p>` : ''}
+     ${ids.map((id) => `<img class="user-photo" alt="" data-picture="${esc(id)}">`).join('')}
+     ${match ? `<a class="btn ghost block compare-link" href="#/compare/${match.id}/${note.id}">${t('compare.withNote')}</a>` : ''}`,
+    `<a class="btn" href="#/image-note/${note.id}">${t('img.edit')}</a>
+     ${ids.length ? `<button class="btn ghost" id="iv-download">${t('img.download')}</button>` : ''}
+     <button class="btn ghost" id="iv-share" hidden>${t('img.share')}</button>`,
+  );
+  dialog.querySelectorAll('[data-picture]').forEach((img) => showPicture(img, img.dataset.picture));
+
+  const base = `body-study-${note.topic || 'note'}-${new Date(note.updatedAt || note.at).toISOString().slice(0, 10)}`;
+  const files = (await Promise.all(ids.map((id) => images.getImage(id).catch(() => null))))
+    .map((blob, i) => blob && new File([blob], `${base}-${i + 1}.jpg`, { type: blob.type || 'image/jpeg' }))
+    .filter(Boolean);
+  const share = $('#iv-share', dialog);
+  if (share && files.length && navigator.canShare?.({ files })) {
+    share.hidden = false;
+    share.onclick = async () => {
+      try { await navigator.share({ files, title: note.title, text: note.caption || undefined }); } catch { /* cancelled */ }
+    };
+  }
+  $('#iv-download', dialog)?.addEventListener('click', () => {
+    files.forEach((file, i) => setTimeout(() => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(file);
+      a.download = file.name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }, i * 300)); // a short gap so the browser allows several downloads
+  });
+}
+
+// Creating or editing an image note: topic, title, pictures (add, remove,
+// reorder; the first is the cover), and a description.
+function imageNoteEditView(id, params) {
+  const existing = id === 'new' ? null : store.getImageNote(id);
+  if (id !== 'new' && !existing) return (location.hash = '#/image-notes');
+  setTitle(t(existing ? 'img.editTitle' : 'img.newTitle'), '#/image-notes');
+  setTab('image-notes');
+  const myNotes = store.getNotes().filter((n) => n.title);
+  const note = existing || { title: params.get('title') || '', topic: params.get('topic') || '', caption: '', images: [] };
+
+  // Pictures in their current order: saved ones by id, new ones as blobs.
+  const items = store.imageIdsOf(note).map((imageId) => ({ imageId }));
+  let dirty = false;
+
+  view.innerHTML = `
+    <form class="panel editor" id="img-form">
+      <p class="muted small">${t('img.help')}</p>
+      ${!existing && myNotes.length ? `
+      <label>${t('img.fromNote')}
+        <select id="img-from">
+          <option value="">${t('img.fromNoteNone')}</option>
+          ${myNotes.map((n) => `<option value="${esc(n.id)}">${esc(n.title)}</option>`).join('')}
+        </select>
+      </label>` : ''}
+      <label>${t('note.topic')}
+        <select id="img-topic">
+          <option value="">${t('note.choose')}</option>
+          ${topicOptions(note.topic)}
+        </select>
+      </label>
+      <label>${t('note.title')}
+        <input id="img-title" maxlength="120" placeholder="${t('note.titlePh')}" value="${esc(note.title)}">
+      </label>
+      <div class="photo-field">
+        <p class="field-label">${t('img.images')}</p>
+        <div class="upload-grid" id="img-grid"></div>
+        <label class="btn ghost small photo-pick">${t('img.addImages')}<input id="img-files" type="file" accept="image/*" multiple hidden></label>
+      </div>
+      <label>${t('img.caption')}
+        <textarea id="img-caption" rows="6" placeholder="${t('img.captionPh')}">${esc(note.caption)}</textarea>
+      </label>
+      <button class="btn block" type="submit" id="img-save">${t('img.save')}</button>
+      ${existing ? `<p class="muted small">${t('note.lastSaved', { time: new Date(existing.updatedAt || existing.at).toLocaleString(locale()) })}</p>` : ''}
+    </form>
+    ${existing ? `<button class="btn danger block" id="img-delete">${t('img.delete')}</button>` : ''}`;
+
+  const form = $('#img-form');
+  form.addEventListener('input', () => { dirty = true; });
+  const grid = $('#img-grid');
+  const urls = new Map(); // item → object URL, so redraws don't reload pictures
+
+  const drawGrid = () => {
+    grid.innerHTML = items.map((item, i) => `
+      <div class="upload-thumb">
+        <img alt="" data-i="${i}">
+        ${i === 0 ? `<span class="cover-tag">${t('img.cover')}</span>` : ''}
+        <button type="button" class="thumb-remove" data-remove="${i}" aria-label="${t('img.removeImage')}">×</button>
+        <span class="thumb-move">
+          <button type="button" data-move="${i}" data-dir="-1" aria-label="${t('img.moveLeft')}" ${i === 0 ? 'disabled' : ''}>‹</button>
+          <button type="button" data-move="${i}" data-dir="1" aria-label="${t('img.moveRight')}" ${i === items.length - 1 ? 'disabled' : ''}>›</button>
+        </span>
+      </div>`).join('') || `<p class="muted small">${t('img.noImages')}</p>`;
+    grid.querySelectorAll('img[data-i]').forEach(async (img) => {
+      const item = items[Number(img.dataset.i)];
+      if (!urls.has(item)) {
+        const blob = item.blob || await images.getImage(item.imageId).catch(() => null);
+        urls.set(item, blob ? URL.createObjectURL(blob) : '');
+      }
+      if (urls.get(item)) img.src = urls.get(item);
+    });
+    grid.querySelectorAll('[data-remove]').forEach((b) => (b.onclick = () => {
+      items.splice(Number(b.dataset.remove), 1);
+      dirty = true;
+      drawGrid();
+    }));
+    grid.querySelectorAll('[data-move]').forEach((b) => (b.onclick = () => {
+      const i = Number(b.dataset.move);
+      const j = i + Number(b.dataset.dir);
+      [items[i], items[j]] = [items[j], items[i]];
+      dirty = true;
+      drawGrid();
+    }));
+  };
+  drawGrid();
+
+  $('#img-from')?.addEventListener('change', (e) => {
+    const n = store.getNote(e.target.value);
+    if (!n) return;
+    $('#img-title').value = n.title;
+    if (n.topic) $('#img-topic').value = n.topic;
+  });
+
+  $('#img-files').onchange = async (e) => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    if (!files.length) return;
+    grid.insertAdjacentHTML('beforeend', `<p class="muted small">${t('img.reading')}</p>`);
+    let bad = 0;
+    for (const file of files) {
+      if (items.length >= MAX_IMAGES) { toast(t('img.tooMany')); break; }
+      try {
+        const { blob } = await images.prepareImage(file, { keep: true });
+        items.push({ blob });
+        dirty = true;
+      } catch {
+        bad++;
+      }
+    }
+    if (bad) toast(t('img.badImages'));
+    drawGrid();
+  };
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const topic = $('#img-topic').value;
+    const title = $('#img-title').value.trim();
+    const caption = $('#img-caption').value.trim();
+    if (!topic) { toast(t('img.needTopic')); return; }
+    if (!title) { toast(t('img.needTitle')); return; }
+    if (!items.length && !caption) { toast(t('img.needContent')); return; }
+    $('#img-save').disabled = true;
+    const ids = [];
+    for (const item of items) {
+      if (!item.imageId) {
+        item.imageId = crypto.randomUUID?.() || `${Date.now()}-${ids.length}`;
+        await images.putImage(item.imageId, item.blob);
+      }
+      ids.push(item.imageId);
+    }
+    // Pictures taken out of the note are deleted here and on other devices.
+    const removed = store.imageIdsOf(note).filter((imageId) => !ids.includes(imageId));
+    removed.forEach((imageId) => images.deleteImage(imageId).catch(() => {}));
+    store.forgetImages(removed);
+    const saved = store.saveImageNote({ ...(existing && { id: existing.id }), topic, title, caption, images: ids });
+    dirty = false;
+    toast(t('img.saved'));
+    location.replace('#/image-notes');
+    setTimeout(() => openImageViewer(saved), 50); // after the list has been drawn
+  };
+
+  $('#img-delete')?.addEventListener('click', () => {
+    if (!confirm(t('img.confirmDelete'))) return;
+    store.imageIdsOf(existing).forEach((imageId) => images.deleteImage(imageId).catch(() => {}));
+    store.deleteImageNote(existing.id);
+    dirty = false;
+    toast(t('img.deleted'));
+    location.hash = '#/image-notes';
+  });
+
+  leaveGuard = () => !dirty || confirm(t('img.unsaved'));
+}
+
+/* ---------- Compare a note with an image note ---------- */
+function compareView(noteId, imageNoteId) {
+  const note = store.getNote(noteId);
+  const img = store.getImageNote(imageNoteId);
+  setTitle(t('compare.title'), '#/notes');
+  setTab('notes');
+  if (!note || !img) {
+    view.innerHTML = `<div class="empty"><p>⇄</p><p>${t('compare.missing')}</p></div>`;
+    return;
+  }
+  const topic = getTopic(img.topic) || getTopic(note.topic) || generalTopic();
+  view.innerHTML = `
+    <section class="panel compare-head" style="--c:${topic.color}">
+      <p class="eyebrow">${topic.icon} ${esc(topic.name)}</p>
+      <h2>${esc(note.title)}</h2>
+      <p class="muted small">${t('compare.hint')}</p>
+    </section>
+    <div class="compare">
+      <section class="panel">
+        <div class="row"><h3>${t('compare.mine')}</h3></div>
+        <div class="compare-text">${note.body ? multiline(note.body) : `<span class="muted">${t('compare.empty')}</span>`}</div>
+        <p class="muted small">${fmtDate(note.updatedAt)}</p>
+        <a class="btn ghost small" href="#/note/${note.id}">${t('compare.edit')}</a>
+      </section>
+      <section class="panel">
+        <div class="row"><h3>${t('compare.images')}</h3></div>
+        ${img.caption ? `<p class="caption">${multiline(img.caption)}</p>` : ''}
+        ${store.imageIdsOf(img).map((id) => `<img class="user-photo" alt="" data-picture="${esc(id)}">`).join('')}
+        <p class="muted small">${fmtDate(img.updatedAt || img.at)}</p>
+        <a class="btn ghost small" href="#/image-note/${img.id}">${t('compare.editImage')}</a>
+      </section>
+    </div>`;
+  view.querySelectorAll('[data-picture]').forEach((el) => showPicture(el, el.dataset.picture));
+}
+
+/* ---------- Settings ---------- */
 // One line describing the sync state, e.g. "Synced 14:02" or the error.
 function syncStateText(st = sync.getStatus()) {
   if (st.state === 'off') return t('sync.state.off');
@@ -1065,7 +563,6 @@ function showSyncStatus(st = sync.getStatus()) {
 function settingsView() {
   setTitle(t('settings.title'));
   setTab('settings');
-  const s = store.getSettings();
   const sc = store.getSyncConfig();
   const lang = getLang();
   view.innerHTML = `
@@ -1074,37 +571,6 @@ function settingsView() {
       <div class="segmented" role="radiogroup" aria-label="${t('settings.language')}">
         ${LANGUAGES.map((l) => `<button type="button" role="radio" aria-checked="${l.id === lang}" data-lang="${l.id}">${l.label}</button>`).join('')}
       </div>
-    </section>
-
-    <section class="panel">
-      <h3>${t('settings.aiTutor')}</h3>
-      <label>${t('settings.provider')}
-        <select id="provider">${PROVIDERS.map((p) => `<option value="${p.id}" ${p.id === s.provider ? 'selected' : ''}>${p.label}</option>`).join('')}</select>
-      </label>
-
-      <div id="claude-fields">
-        <label>${t('settings.claudeKey')}
-          <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(s.apiKey)}">
-        </label>
-        <p class="muted small">${t('settings.claudeHelp')}</p>
-        <label>${t('settings.model')}
-          <select id="model">${claudeModels().map((m) => `<option value="${m.id}" ${m.id === s.model ? 'selected' : ''}>${m.label}</option>`).join('')}</select>
-        </label>
-      </div>
-
-      <div id="gemini-fields">
-        <label>${t('settings.geminiKey')}
-          <input id="gkey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…" value="${esc(s.geminiKey)}">
-        </label>
-        <p class="muted small">${t('settings.geminiHelp')}</p>
-        <label>${t('settings.model')}
-          <select id="gmodel"></select>
-        </label>
-        <button class="link" id="load-models" type="button">${t('settings.loadModels')}</button>
-      </div>
-
-      <p class="muted small">${t('settings.keysLocal')}</p>
-      <button class="btn block" id="save">${t('settings.save')}</button>
     </section>
 
     <section class="panel" id="sync-panel">
@@ -1163,8 +629,7 @@ function settingsView() {
       toast(t('sync.connected'));
       settingsView();
     } catch (err) {
-      const code = err.code || 'other';
-      toast(t(`sync.err.${code}`, { status: err.status ?? '' }));
+      toast(t(`sync.err.${err.code || 'other'}`, { status: err.status ?? '' }));
       e.target.disabled = false;
     }
   });
@@ -1176,44 +641,8 @@ function settingsView() {
   });
   showSyncStatus();
 
-  const providerSel = $('#provider');
-  const showProvider = () => {
-    $('#claude-fields').hidden = providerSel.value !== 'claude';
-    $('#gemini-fields').hidden = providerSel.value !== 'gemini';
-  };
-  providerSel.onchange = showProvider;
-  showProvider();
-
-  const fillGeminiModels = (models) => {
-    if (!models.some((m) => m.id === s.geminiModel)) models = [{ id: s.geminiModel, label: s.geminiModel }, ...models];
-    $('#gmodel').innerHTML = models.map((m) => `<option value="${esc(m.id)}" ${m.id === s.geminiModel ? 'selected' : ''}>${esc(m.label)}</option>`).join('');
-  };
-  fillGeminiModels(geminiModels());
-  $('#load-models').onclick = async () => {
-    const key = $('#gkey').value.trim();
-    if (!key) { toast(t('toast.enterGeminiKey')); return; }
-    try {
-      const models = await listGeminiModels(key);
-      s.geminiModel = $('#gmodel').value;
-      fillGeminiModels([...geminiModels(), ...models]);
-      toast(t('toast.loadedModels', { n: models.length }));
-    } catch (err) {
-      toast(friendlyError(err));
-    }
-  };
-
-  $('#save').onclick = () => {
-    store.saveSettings({
-      provider: providerSel.value,
-      apiKey: $('#key').value.trim(),
-      model: $('#model').value,
-      geminiKey: $('#gkey').value.trim(),
-      geminiModel: $('#gmodel').value,
-    });
-    toast(t('toast.settingsSaved'));
-  };
   $('#export').onclick = async () => {
-    const ids = store.getAiNotes().flatMap(store.aiImageIds);
+    const ids = store.getImageNotes().flatMap(store.imageIdsOf);
     const blob = new Blob([store.exportData(await images.exportImages(ids))], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1246,8 +675,17 @@ function settingsView() {
 }
 
 /* ---------- Router ---------- */
+// Set by an editor with unsaved changes; returns false to stay on it.
+let leaveGuard = null;
+let currentHash = location.hash;
+
 function route() {
-  stopRequest();
+  if (leaveGuard && !leaveGuard()) {
+    history.replaceState(null, '', currentHash); // stay on the editor
+    return;
+  }
+  leaveGuard = null;
+  currentHash = location.hash;
   document.querySelectorAll('dialog[open]').forEach((d) => d.close());
   const [path, query = ''] = location.hash.replace(/^#/, '').split('?');
   const parts = path.split('/').filter(Boolean);
@@ -1255,7 +693,8 @@ function route() {
   if (parts[0] === 'topic' && parts[1]) topicView(parts[1]);
   else if (parts[0] === 'notes') notesView();
   else if (parts[0] === 'note' && parts[1]) noteEditView(parts[1], params);
-  else if (parts[0] === 'ai-notes') aiNotesView();
+  else if (parts[0] === 'image-notes') imageNotesView();
+  else if (parts[0] === 'image-note' && parts[1]) imageNoteEditView(parts[1], params);
   else if (parts[0] === 'compare' && parts[2]) compareView(parts[1], parts[2]);
   else if (parts[0] === 'settings') settingsView();
   else homeView();
@@ -1273,19 +712,22 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => { /* offline support unavailable */ });
 }
 
+// Links from earlier versions.
+if (location.hash.startsWith('#/ai-notes')) history.replaceState(null, '', '#/image-notes');
+
 store.requestPersistence();
 applyLanguage();
 window.addEventListener('hashchange', route);
 route();
 
 // Cloud sync: when another device's changes arrive, refresh the screen unless
-// the student is in the middle of writing or waiting for the AI.
+// the student is in the middle of writing.
 sync.onStatus(showSyncStatus);
 showSyncStatus();
 sync.init({
   onRemoteChange: () => {
     applyLanguage();
-    const busy = activeRequest || document.querySelector('dialog[open]') || location.hash.startsWith('#/note/')
+    const busy = leaveGuard || document.querySelector('dialog[open]')
       || (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName));
     if (!busy) route();
     toast(t('sync.updated'));

@@ -1,7 +1,7 @@
 {
-  "name": "Body Study · AI Tutor",
+  "name": "Body Study",
   "short_name": "Body Study",
-  "description": "Learn the human body with an AI tutor and keep notes of what you know.",
+  "description": "Study the human body and keep your own notes and image notes.",
   "lang": "en",
   "id": "./",
   "start_url": "./",

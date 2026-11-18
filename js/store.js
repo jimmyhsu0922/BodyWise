@@ -1,16 +1,16 @@
-// Everything is saved on this device (localStorage). With cloud sync turned
-// on (Settings), the same data is also kept in the student's own private
-// GitHub repository so every device shares it; see sync.js.
+// Everything is saved on this device (localStorage; pictures in IndexedDB).
+// With cloud sync turned on (Settings), the same data is also kept in the
+// student's own private GitHub repository so every device shares it; see sync.js.
 const KEYS = {
   notes: 'bs.notes',
-  chats: 'bs.chats',
+  chats: 'bs.chats', // AI tutor chats from earlier versions; kept and synced, not shown
   chatsAt: 'bs.chatsAt', // { topicId: last change time }
   settings: 'bs.settings',
   prefsAt: 'bs.prefsAt', // { setting: last change time } for the synced settings
   done: 'bs.done',
   doneAt: 'bs.doneAt', // { topicId: { done, at } }
   summaries: 'bs.summaries', // older versions; read once to migrate
-  aiNotes: 'bs.aiNotes',
+  aiNotes: 'bs.aiNotes', // image notes (named after the old AI notes)
   deleted: 'bs.deleted', // { id: { at, image? } } so deletions sync too
   sync: 'bs.sync', // cloud sync setup for this device
 };
@@ -52,18 +52,10 @@ function markDeleted(id, extra = {}) {
 /* ---------- Settings ---------- */
 const DEFAULT_SETTINGS = {
   lang: '', // '' = follow the phone's language
-  provider: 'claude',
-  apiKey: '', // Claude key
-  model: 'claude-opus-5-5',
-  geminiKey: '',
-  geminiModel: 'gemini-flash-latest',
-  tutorStyle: 'default', // or 'custom'
-  tutorLength: 'medium',
-  tutorCustom: '',
 };
 
-// Settings shared between devices. API keys are not: each device keeps its own.
-export const SYNCED_PREFS = ['lang', 'provider', 'model', 'geminiModel', 'tutorStyle', 'tutorLength', 'tutorCustom'];
+// Settings shared between devices.
+export const SYNCED_PREFS = ['lang'];
 
 export function getSettings() {
   return { ...DEFAULT_SETTINGS, ...read(KEYS.settings, {}) };
@@ -117,46 +109,72 @@ export function deleteNote(id) {
   changed();
 }
 
-/* ---------- Chat history (one conversation per topic) ---------- */
-export function getChat(topicId) {
-  return read(KEYS.chats, {})[topicId] || [];
+/* ---------- Image notes ---------- */
+// { id, topic, title, caption, images: [imageId…], at, updatedAt }
+// Pictures live in IndexedDB (images.js). The list is stored under the old
+// "AI notes" key so existing notes and synced data carry over.
+export const imageIdsOf = (n) => n.images || [];
+
+// Earlier versions had AI-written notes (a "card" of questions and answers,
+// maybe one attached picture). Turn those into plain image notes: the card
+// text becomes the description, and the picture is kept.
+function upgrade(n) {
+  if (!n.card && !n.imageId && Array.isArray(n.images) && 'title' in n) return n;
+  const c = n.card;
+  const text = c ? [
+    c.subtitle,
+    ...(c.points || []).map((p) => `${p.emoji ? `${p.emoji} ` : ''}${p.question}\n${p.answer}`),
+    c.takeaway && `💡 ${c.takeaway}`,
+  ].filter(Boolean).join('\n\n') : '';
+  const { card, imageId, chatLength, source, lang, ...rest } = n;
+  return {
+    ...rest,
+    title: n.title ?? c?.title ?? '',
+    caption: n.caption || text,
+    images: [...(n.images || []), ...(imageId ? [imageId] : [])],
+  };
 }
 
-export function saveChat(topicId, messages) {
-  const chats = read(KEYS.chats, {});
-  chats[topicId] = messages;
-  write(KEYS.chats, chats);
-  const at = read(KEYS.chatsAt, {});
-  at[topicId] = Date.now();
-  write(KEYS.chatsAt, at);
+export function getImageNotes() {
+  let notes = read(KEYS.aiNotes, null);
+  if (!notes) {
+    // The oldest versions kept one summary per topic.
+    notes = Object.entries(read(KEYS.summaries, {})).map(([topic, s]) => ({ id: String(s.at), topic, ...s }));
+  }
+  const upgraded = notes.map(upgrade);
+  if (upgraded.some((n, i) => n !== notes[i]) || !localStorage.getItem(KEYS.aiNotes)) write(KEYS.aiNotes, upgraded);
+  return upgraded.sort((a, b) => (b.updatedAt || b.at) - (a.updatedAt || a.at));
+}
+
+export function getImageNote(id) {
+  return getImageNotes().find((n) => n.id === id) || null;
+}
+
+// Creates or updates an image note; returns the saved note.
+export function saveImageNote(note) {
+  const notes = getImageNotes();
+  const now = Date.now();
+  const i = notes.findIndex((n) => n.id === note.id);
+  const saved = i >= 0
+    ? { ...notes[i], ...note, updatedAt: now }
+    : { id: crypto.randomUUID?.() || String(now), at: now, updatedAt: now, caption: '', images: [], ...note };
+  if (i >= 0) notes[i] = saved; else notes.unshift(saved);
+  write(KEYS.aiNotes, notes);
+  changed();
+  return saved;
+}
+
+export function deleteImageNote(id) {
+  const note = getImageNote(id);
+  write(KEYS.aiNotes, getImageNotes().filter((n) => n.id !== id));
+  const pictures = note ? imageIdsOf(note) : [];
+  markDeleted(id, pictures.length ? { images: pictures } : {});
   changed();
 }
 
-/* ---------- AI notes ---------- */
-// Made by the AI (we keep the card text and draw the image when shown):
-//   { id, topic, card, at, chatLength?, lang, source?: 'manual', imageId? }
-// Or images the student uploads (screenshots of other AI chats, AI pictures):
-//   { id, topic, title, caption, images: [imageId…], at, source: 'upload' }
-export const aiTitle = (n) => n.card?.title ?? n.title ?? '';
-export const aiImageIds = (n) => [n.imageId, ...(n.images || [])].filter(Boolean);
-
-export function getAiNotes() {
-  let notes = read(KEYS.aiNotes, null);
-  if (!notes) {
-    // Earlier versions kept one summary per topic; turn those into AI notes.
-    notes = Object.entries(read(KEYS.summaries, {})).map(([topic, s]) => ({ id: String(s.at), topic, ...s }));
-    write(KEYS.aiNotes, notes);
-  }
-  return notes.sort((a, b) => b.at - a.at);
-}
-
-export function getAiNote(id) {
-  return getAiNotes().find((n) => n.id === id) || null;
-}
-
-// The newest AI note made from this topic's chat, or null.
-export function latestAiNote(topicId) {
-  return getAiNotes().find((n) => n.topic === topicId && !n.source) || null;
+// Pictures taken out of a note while editing: remove them on other devices too.
+export function forgetImages(ids) {
+  if (ids.length) markDeleted(`removed-images-${Date.now()}`, { images: ids });
 }
 
 // Titles match when they are the same apart from spaces, punctuation, and case.
@@ -164,29 +182,14 @@ export function normalizeTitle(title) {
   return String(title || '').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
 }
 
-export function aiNotesWithTitle(title) {
+export function imageNotesWithTitle(title) {
   const key = normalizeTitle(title);
-  return key ? getAiNotes().filter((n) => normalizeTitle(aiTitle(n)) === key) : [];
+  return key ? getImageNotes().filter((n) => normalizeTitle(n.title) === key) : [];
 }
 
 export function notesWithTitle(title) {
   const key = normalizeTitle(title);
   return key ? getNotes().filter((n) => normalizeTitle(n.title) === key) : [];
-}
-
-export function addAiNote(note) {
-  const full = { id: crypto.randomUUID?.() || String(Date.now()), ...note };
-  write(KEYS.aiNotes, [full, ...getAiNotes()]);
-  changed();
-  return full;
-}
-
-export function deleteAiNote(id) {
-  const note = getAiNote(id);
-  write(KEYS.aiNotes, getAiNotes().filter((n) => n.id !== id));
-  const pictures = note ? aiImageIds(note) : [];
-  markDeleted(id, pictures.length ? { images: pictures } : {});
-  changed();
 }
 
 /* ---------- Topics marked as learned ---------- */
@@ -222,7 +225,7 @@ export function snapshot() {
   for (const id of known) doneAt[id] ??= { done: true, at: 0 };
   return {
     notes: read(KEYS.notes, []),
-    aiNotes: getAiNotes(),
+    aiNotes: getImageNotes(),
     chats: read(KEYS.chats, {}),
     chatsAt: read(KEYS.chatsAt, {}),
     done: doneAt,
@@ -254,7 +257,7 @@ export function exportData(images = {}) {
     exportedAt: new Date().toISOString(),
     notes: read(KEYS.notes, []),
     chats: read(KEYS.chats, {}),
-    aiNotes: getAiNotes(),
+    aiNotes: getImageNotes(),
     images,
     done: getDone(),
   }, null, 2);
@@ -271,7 +274,7 @@ export function importData(text) {
   }
   write(KEYS.notes, [...byId.values()]);
   write(KEYS.chats, { ...data.chats, ...read(KEYS.chats, {}) });
-  const aiById = new Map(getAiNotes().map((n) => [n.id, n]));
+  const aiById = new Map(getImageNotes().map((n) => [n.id, n]));
   for (const n of data.aiNotes || []) if (!aiById.has(n.id)) aiById.set(n.id, n);
   write(KEYS.aiNotes, [...aiById.values()]);
   write(KEYS.done, [...new Set([...getDone(), ...(data.done || [])])]);

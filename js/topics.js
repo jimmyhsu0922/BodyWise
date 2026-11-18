@@ -15,7 +15,7 @@ const BASE = [
   { id: 'reproductive', icon: '🧬', color: '#c0392b' },
   { id: 'cells', icon: '🔬', color: '#7f8c8d' },
 ];
-const GENERAL_BASE = { id: 'general', icon: '💬', color: '#5865f2' };
+const GENERAL_BASE = { id: 'general', icon: '🗂️', color: '#5865f2' };
 
 const TEXT = {
   en: {
@@ -92,8 +92,8 @@ const TEXT = {
       facts: ['Mitochondria release energy from glucose in cellular respiration.', 'DNA in the nucleus holds the instructions for making proteins.', 'Levels: cell → tissue → organ → system → organism.'],
     },
     general: {
-      name: 'Ask Anything',
-      overview: 'Ask any question about the human body — how systems connect, exam questions, or things you’re curious about.',
+      name: 'General',
+      overview: 'Notes that cover several body systems or don’t belong to one, such as homeostasis or exam reviews.',
       parts: [], facts: [],
     },
   },
@@ -172,8 +172,8 @@ const TEXT = {
       facts: ['粒線體透過細胞呼吸，從葡萄糖中釋放能量。', '細胞核中的 DNA 帶有製造蛋白質的指令。', '層次：細胞 → 組織 → 器官 → 系統 → 個體。'],
     },
     general: {
-      name: '自由發問',
-      overview: '問任何關於人體的問題：系統之間怎麼連結、考試題目，或任何你好奇的事。',
+      name: '綜合',
+      overview: '跨越多個系統、或不屬於單一系統的筆記，例如恆定性、考前總複習。',
       parts: [], facts: [],
     },
   },

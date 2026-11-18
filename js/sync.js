@@ -1,4 +1,4 @@
-// Cloud sync: keeps the student's data in their own private GitHub
+// Cloud sync: keeps the student's notes in their own private GitHub
 // repository so phone and computer share the same notes. One JSON file holds
 // the data; pictures go in an images/ folder. Each device merges its data
 // with the file (newest change wins, deletions included) and writes it back.
@@ -176,7 +176,7 @@ async function syncImages(doc) {
   const config = store.getSyncConfig();
   const uploaded = new Set(config.uploaded || []);
   const removed = new Set(config.removed || []);
-  for (const imageId of doc.aiNotes.flatMap(store.aiImageIds)) {
+  for (const imageId of doc.aiNotes.flatMap(store.imageIdsOf)) {
     const path = contentPath(`${IMAGE_DIR}/${imageId}.jpg`);
     const local = await images.getImage(imageId).catch(() => null);
     if (!local) {
