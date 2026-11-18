@@ -29,11 +29,15 @@ export const putImage = (id, blob) => run('readwrite', (s) => s.put(blob, id));
 export const getImage = (id) => run('readonly', (s) => s.get(id));
 export const deleteImage = (id) => run('readwrite', (s) => s.delete(id));
 
-// Shrinks a photo to at most MAX_SIDE pixels and re-encodes it as JPEG.
-// Resolves to { blob, mediaType, base64 } or throws if it can't be read.
-export async function prepareImage(file) {
+// Shrinks a photo and re-encodes it as JPEG. Resolves to
+// { blob, mediaType, base64 } or throws if it can't be read.
+// For the AI to read: at most MAX_SIDE pixels on the long side.
+// To keep (screenshots): readable width, and long screenshots stay long.
+export async function prepareImage(file, { keep = false } = {}) {
   const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const scale = keep
+    ? Math.min(1, 1440 / bitmap.width, Math.sqrt(16e6 / (bitmap.width * bitmap.height)))
+    : Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(bitmap.width * scale);
   canvas.height = Math.round(bitmap.height * scale);
@@ -43,7 +47,7 @@ export async function prepareImage(file) {
   ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   bitmap.close?.();
   const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
-  return { blob, mediaType: 'image/jpeg', base64: await blobToBase64(blob) };
+  return { blob, mediaType: 'image/jpeg', base64: keep ? '' : await blobToBase64(blob) };
 }
 
 function blobToBase64(blob) {

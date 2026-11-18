@@ -270,6 +270,19 @@ button.fab { border: 0; cursor: pointer; }
 .photo-preview { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 6px; }
 .photo-preview img { max-width: 60%; max-height: 180px; border-radius: 10px; border: 1px solid var(--line); }
 .photo-label { margin-top: 14px; }
+.user-photo + .user-photo { margin-top: 10px; }
+.mode-switch { margin: 0 0 4px; }
+.upload-title { margin: 0 0 6px; font-size: 1.05rem; }
+.caption { margin: 0 0 12px; color: var(--muted); white-space: pre-wrap; }
+.upload-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.upload-grid > p { grid-column: 1 / -1; margin: 0; }
+.upload-thumb { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); }
+.upload-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+.upload-thumb button {
+  position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 50%; border: 0; cursor: pointer;
+  background: rgba(0, 0, 0, .65); color: #fff; font-size: 1rem; line-height: 1;
+}
+.ai-note .thumb img:not([src]) { visibility: hidden; }
 .user-photo { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line); }
 .add-ai label { display: block; font-weight: 600; font-size: .9rem; margin-bottom: 12px; }
 .add-ai label > * { margin-top: 6px; font-weight: 400; font-size: 1rem; }

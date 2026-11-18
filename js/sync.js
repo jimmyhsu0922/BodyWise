@@ -176,32 +176,32 @@ async function syncImages(doc) {
   const config = store.getSyncConfig();
   const uploaded = new Set(config.uploaded || []);
   const removed = new Set(config.removed || []);
-  for (const note of doc.aiNotes) {
-    if (!note.imageId) continue;
-    const path = contentPath(`${IMAGE_DIR}/${note.imageId}.jpg`);
-    const local = await images.getImage(note.imageId).catch(() => null);
+  for (const imageId of doc.aiNotes.flatMap(store.aiImageIds)) {
+    const path = contentPath(`${IMAGE_DIR}/${imageId}.jpg`);
+    const local = await images.getImage(imageId).catch(() => null);
     if (!local) {
       // Not here yet: download it. A 404 means the other device hasn't
       // uploaded it yet, so try again next sync.
       const res = await gh(path, { raw: true });
       if (res.ok) {
-        await images.putImage(note.imageId, await res.blob());
-        uploaded.add(note.imageId);
+        await images.putImage(imageId, await res.blob());
+        uploaded.add(imageId);
       } else if (res.status !== 404) {
         throw fail(res);
       }
-    } else if (!uploaded.has(note.imageId)) {
+    } else if (!uploaded.has(imageId)) {
       const content = toBase64(new Uint8Array(await local.arrayBuffer()));
       const res = await gh(path, { method: 'PUT', body: { message: 'BodyWise picture', content } });
       if (!res.ok && res.status !== 422) throw fail(res); // 422: already there
-      uploaded.add(note.imageId);
+      uploaded.add(imageId);
     }
   }
   // Pictures of deleted AI notes: remove them here and in the repository.
-  for (const [, d] of Object.entries(doc.deleted)) {
-    if (!d.image || removed.has(d.image)) continue;
-    await images.deleteImage(d.image).catch(() => {});
-    const path = contentPath(`${IMAGE_DIR}/${d.image}.jpg`);
+  const gone = Object.values(doc.deleted).flatMap((d) => [d.image, ...(d.images || [])]).filter(Boolean);
+  for (const imageId of gone) {
+    if (removed.has(imageId)) continue;
+    await images.deleteImage(imageId).catch(() => {});
+    const path = contentPath(`${IMAGE_DIR}/${imageId}.jpg`);
     const meta = await gh(path);
     if (meta.ok) {
       const { sha } = await meta.json();
@@ -210,7 +210,7 @@ async function syncImages(doc) {
     } else if (meta.status !== 404) {
       throw fail(meta);
     }
-    removed.add(d.image);
+    removed.add(imageId);
   }
   store.saveSyncConfig({ uploaded: [...uploaded], removed: [...removed] });
 }

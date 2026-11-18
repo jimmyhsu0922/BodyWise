@@ -132,8 +132,14 @@ export function saveChat(topicId, messages) {
   changed();
 }
 
-/* ---------- AI notes (generated images; we keep the card text) ---------- */
-// Each: { id, topic, card, at, chatLength, lang, source?, imageId? }
+/* ---------- AI notes ---------- */
+// Made by the AI (we keep the card text and draw the image when shown):
+//   { id, topic, card, at, chatLength?, lang, source?: 'manual', imageId? }
+// Or images the student uploads (screenshots of other AI chats, AI pictures):
+//   { id, topic, title, caption, images: [imageId…], at, source: 'upload' }
+export const aiTitle = (n) => n.card?.title ?? n.title ?? '';
+export const aiImageIds = (n) => [n.imageId, ...(n.images || [])].filter(Boolean);
+
 export function getAiNotes() {
   let notes = read(KEYS.aiNotes, null);
   if (!notes) {
@@ -150,7 +156,7 @@ export function getAiNote(id) {
 
 // The newest AI note made from this topic's chat, or null.
 export function latestAiNote(topicId) {
-  return getAiNotes().find((n) => n.topic === topicId && n.source !== 'manual') || null;
+  return getAiNotes().find((n) => n.topic === topicId && !n.source) || null;
 }
 
 // Titles match when they are the same apart from spaces, punctuation, and case.
@@ -160,7 +166,7 @@ export function normalizeTitle(title) {
 
 export function aiNotesWithTitle(title) {
   const key = normalizeTitle(title);
-  return key ? getAiNotes().filter((n) => normalizeTitle(n.card?.title) === key) : [];
+  return key ? getAiNotes().filter((n) => normalizeTitle(aiTitle(n)) === key) : [];
 }
 
 export function notesWithTitle(title) {
@@ -178,7 +184,8 @@ export function addAiNote(note) {
 export function deleteAiNote(id) {
   const note = getAiNote(id);
   write(KEYS.aiNotes, getAiNotes().filter((n) => n.id !== id));
-  markDeleted(id, note?.imageId ? { image: note.imageId } : {});
+  const pictures = note ? aiImageIds(note) : [];
+  markDeleted(id, pictures.length ? { images: pictures } : {});
   changed();
 }
 

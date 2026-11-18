@@ -361,6 +361,132 @@ function openTutorSettings(onSaved) {
   dialog.showModal();
 }
 
+/* ---------- New AI note: two ways to make one ---------- */
+function modeSwitchHtml(active) {
+  return `<div class="segmented mode-switch" role="radiogroup">
+    ${[['ai', t('aiNotes.modeAi')], ['upload', t('aiNotes.modeUpload')]].map(([id, label]) =>
+      `<button type="button" role="radio" data-mode="${id}" aria-checked="${id === active}">${label}</button>`).join('')}
+  </div>`;
+}
+
+// Switching mode reopens the form in the other mode, keeping topic and title.
+function bindModeSwitch(dialog, active, current) {
+  dialog.querySelectorAll('[data-mode]').forEach((b) => (b.onclick = () => {
+    if (b.dataset.mode === active) return;
+    const prefill = current();
+    dialog.close();
+    (b.dataset.mode === 'upload' ? openUploadAiNote : openAddAiNote)(prefill);
+  }));
+}
+
+// Save the student's own images (screenshots of chats with other AIs,
+// pictures an AI made) as an AI note. No AI call.
+function openUploadAiNote(prefill = {}) {
+  const myNotes = store.getNotes().filter((n) => n.title);
+  const dialog = document.createElement('dialog');
+  dialog.className = 'sheet';
+  dialog.innerHTML = `
+    <div class="sheet-head">
+      <h3>${t('aiNotes.add')}</h3>
+      <button class="link" id="up-close">${t('summary.close')}</button>
+    </div>
+    ${modeSwitchHtml('upload')}
+    <div class="sheet-body add-ai">
+      <p class="muted small">${t('aiNotes.uploadHelp')}</p>
+      ${myNotes.length ? `
+      <label>${t('aiNotes.fromNote')}
+        <select id="up-from">
+          <option value="">${t('aiNotes.fromNoteNone')}</option>
+          ${myNotes.map((n) => `<option value="${esc(n.id)}">${esc(n.title)}</option>`).join('')}
+        </select>
+      </label>` : ''}
+      <label>${t('note.topic')}
+        <select id="up-topic">
+          <option value="">${t('note.choose')}</option>
+          ${topicOptions(prefill.topic || '')}
+        </select>
+      </label>
+      <label>${t('note.title')}
+        <input id="up-title" maxlength="120" placeholder="${t('note.titlePh')}" value="${esc(prefill.title || '')}">
+      </label>
+      <div class="photo-field">
+        <p class="field-label">${t('aiNotes.images')}</p>
+        <label class="btn ghost small photo-pick">${t('aiNotes.addImages')}<input id="up-files" type="file" accept="image/*" multiple hidden></label>
+        <div class="upload-grid" id="up-grid"></div>
+      </div>
+      <label>${t('aiNotes.caption')}
+        <textarea id="up-caption" rows="3" placeholder="${t('aiNotes.captionPh')}"></textarea>
+      </label>
+    </div>
+    <div class="actions">
+      <button class="btn block" id="up-save">${t('aiNotes.saveUpload')}</button>
+    </div>`;
+  document.body.append(dialog);
+  dialog.addEventListener('close', () => dialog.remove());
+  $('#up-close', dialog).onclick = () => dialog.close();
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+  bindModeSwitch(dialog, 'upload', () => ({ topic: $('#up-topic', dialog).value, title: $('#up-title', dialog).value }));
+
+  $('#up-from', dialog)?.addEventListener('change', (e) => {
+    const n = store.getNote(e.target.value);
+    if (!n) return;
+    $('#up-title', dialog).value = n.title;
+    if (n.topic) $('#up-topic', dialog).value = n.topic;
+  });
+
+  let picked = []; // shrunk images: { blob }
+  const grid = $('#up-grid', dialog);
+  const drawGrid = () => {
+    grid.innerHTML = picked.map((p, i) => `
+      <div class="upload-thumb">
+        <img alt="" src="${URL.createObjectURL(p.blob)}">
+        <button type="button" data-remove="${i}" aria-label="${t('aiNotes.removeImage')}">×</button>
+      </div>`).join('');
+    grid.querySelectorAll('[data-remove]').forEach((b) => (b.onclick = () => {
+      picked.splice(Number(b.dataset.remove), 1);
+      drawGrid();
+    }));
+  };
+  $('#up-files', dialog).onchange = async (e) => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    if (!files.length) return;
+    grid.insertAdjacentHTML('beforeend', `<p class="muted small" id="up-reading">${t('aiNotes.reading')}</p>`);
+    let bad = 0;
+    for (const file of files) {
+      if (picked.length >= 10) { toast(t('aiNotes.tooManyImages')); break; }
+      try { picked.push(await images.prepareImage(file, { keep: true })); } catch { bad++; }
+    }
+    if (bad) toast(t('aiNotes.badImages'));
+    drawGrid();
+  };
+
+  $('#up-save', dialog).onclick = async (e) => {
+    const topic = getTopic($('#up-topic', dialog).value);
+    const title = $('#up-title', dialog).value.trim();
+    if (!topic) { toast(t('aiNotes.needTopic')); return; }
+    if (!title) { toast(t('aiNotes.needTitle')); return; }
+    if (!picked.length) { toast(t('aiNotes.needImages')); return; }
+    e.target.disabled = true;
+    const ids = [];
+    for (const p of picked) {
+      const id = crypto.randomUUID?.() || `${Date.now()}-${ids.length}`;
+      await images.putImage(id, p.blob);
+      ids.push(id);
+    }
+    const note = store.addAiNote({
+      topic: topic.id, title, caption: $('#up-caption', dialog).value.trim(), images: ids,
+      at: Date.now(), lang: getLang(), source: 'upload',
+    });
+    dialog.close();
+    toast(t('summary.saved'));
+    if (location.hash.startsWith('#/ai-notes')) aiNotesView();
+    openImageDialog({ topic, note });
+  };
+
+  dialog.showModal();
+}
+
 /* ---------- New AI note (written by the student's request) ---------- */
 function openAddAiNote(prefill = {}) {
   const myNotes = store.getNotes().filter((n) => n.title);
@@ -371,6 +497,7 @@ function openAddAiNote(prefill = {}) {
       <h3>${t('aiNotes.add')}</h3>
       <button class="link" id="an-close">${t('summary.close')}</button>
     </div>
+    ${modeSwitchHtml('ai')}
     <div class="sheet-body add-ai" id="an-body">
       <p class="muted small">${t('aiNotes.addHelp')}</p>
       ${myNotes.length ? `
@@ -413,6 +540,7 @@ function openAddAiNote(prefill = {}) {
   const close = () => { ctrl?.abort(); dialog.close(); };
   dialog.addEventListener('close', () => dialog.remove());
   $('#an-close', dialog).onclick = close;
+  bindModeSwitch(dialog, 'ai', () => ({ topic: $('#an-topic', dialog)?.value, title: $('#an-title', dialog)?.value }));
   dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
 
   // The picture, shrunk and ready to send: { blob, mediaType, base64 }.
@@ -525,25 +653,29 @@ function compareView(noteId, aiId) {
       </section>
       <section class="panel">
         <div class="row"><h3>${t('compare.ai')}</h3></div>
+        ${ai.card ? `
         <ol class="compare-points">
           ${ai.card.points.map((p) => `<li><strong>${esc(p.emoji)} ${esc(p.question)}</strong><span>${esc(p.answer)}</span></li>`).join('')}
         </ol>
-        <p class="takeaway">💡 ${esc(ai.card.takeaway)}</p>
+        <p class="takeaway">💡 ${esc(ai.card.takeaway)}</p>` : `${ai.caption ? `<p class="caption">${esc(ai.caption)}</p>` : ''}`}
         <div id="cmp-photo"></div>
         <p class="muted small">${fmtDate(ai.at)}</p>
         <button class="btn ghost small" id="cmp-image">${t('compare.viewImage')}</button>
       </section>
     </div>`;
   $('#cmp-image').onclick = () => openImageDialog({ topic, note: ai });
-  if (ai.imageId) {
-    images.getImage(ai.imageId).then((photo) => {
-      const el = $('#cmp-photo');
-      if (photo && el) el.innerHTML = `<p class="field-label photo-label">${t('aiNotes.yourPhoto')}</p><img class="user-photo" alt="${t('aiNotes.yourPhoto')}" src="${URL.createObjectURL(photo)}">`;
-    }).catch(() => {});
-  }
+  Promise.all(store.aiImageIds(ai).map((id) => images.getImage(id).catch(() => null))).then((pictures) => {
+    const el = $('#cmp-photo');
+    if (!el) return;
+    const shown = pictures.filter(Boolean);
+    el.innerHTML = (shown.length && ai.card ? `<p class="field-label photo-label">${t('aiNotes.yourPhoto')}</p>` : '')
+      + shown.map((p) => `<img class="user-photo" alt="" src="${URL.createObjectURL(p)}">`).join('');
+  });
 }
 
 /* ---------- AI notes (summary images) ---------- */
+const aiTitleOf = store.aiTitle;
+
 function cardCanvas(note, topic) {
   return drawCard(note.card, {
     color: topic.color,
@@ -568,7 +700,7 @@ function openImageDialog({ topic, history, note: givenNote }) {
   dialog.className = 'sheet';
   dialog.innerHTML = `
     <div class="sheet-head">
-      <h3>${t('summary.title')}</h3>
+      <h3>${givenNote ? esc(aiTitleOf(givenNote)) : t('summary.title')}</h3>
       <button class="link" id="sum-close">${t('summary.close')}</button>
     </div>
     <div class="sheet-body" id="sum-body"></div>
@@ -584,8 +716,8 @@ function openImageDialog({ topic, history, note: givenNote }) {
   const body = $('#sum-body', dialog);
   const actions = $('#sum-actions', dialog);
   let ctrl = null;
-  let blob = null;
-  const fileName = () => `body-study-${topic.id}-${new Date(note?.at || Date.now()).toISOString().slice(0, 10)}.png`;
+  let files = [];
+  const fileBase = () => `body-study-${topic.id}-${new Date(note?.at || Date.now()).toISOString().slice(0, 10)}`;
 
   const close = () => { ctrl?.abort(); dialog.close(); };
   dialog.addEventListener('close', () => dialog.remove());
@@ -593,17 +725,28 @@ function openImageDialog({ topic, history, note: givenNote }) {
   dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
 
   const show = async (message = '') => {
-    blob = await canvasBlob(cardCanvas(note, topic));
-    body.innerHTML = `${message ? `<p class="muted small">${message}</p>` : ''}<img class="summary-img" alt="${esc(t('summary.alt', { topic: topic.name }))}" src="${URL.createObjectURL(blob)}">`;
-    if (note.imageId) {
-      const photo = await images.getImage(note.imageId).catch(() => null);
-      if (photo) body.insertAdjacentHTML('beforeend', `<p class="field-label photo-label">${t('aiNotes.yourPhoto')}</p><img class="user-photo" alt="${t('aiNotes.yourPhoto')}" src="${URL.createObjectURL(photo)}">`);
+    // What Download/Share hand out: the AI's card, or the uploaded images.
+    files = [];
+    let html = message ? `<p class="muted small">${message}</p>` : '';
+    if (note.card) {
+      const blob = await canvasBlob(cardCanvas(note, topic));
+      files.push(new File([blob], `${fileBase()}.png`, { type: 'image/png' }));
+      html += `<img class="summary-img" alt="${esc(t('summary.alt', { topic: topic.name }))}" src="${URL.createObjectURL(blob)}">`;
+    } else {
+      html += `<h4 class="upload-title">${esc(aiTitleOf(note))}</h4>${note.caption ? `<p class="caption">${esc(note.caption)}</p>` : ''}`;
     }
+    const pictures = await Promise.all(store.aiImageIds(note).map((id) => images.getImage(id).catch(() => null)));
+    pictures.forEach((photo, i) => {
+      if (!photo) return;
+      if (!note.card) files.push(new File([photo], `${fileBase()}-${i + 1}.jpg`, { type: 'image/jpeg' }));
+      const label = note.card && i === 0 ? `<p class="field-label photo-label">${t('aiNotes.yourPhoto')}</p>` : '';
+      html += `${label}<img class="user-photo" alt="" src="${URL.createObjectURL(photo)}">`;
+    });
+    body.innerHTML = html;
     actions.hidden = false;
-    $('#sum-download', dialog).hidden = false;
-    const file = new File([blob], fileName(), { type: 'image/png' });
-    $('#sum-share', dialog).hidden = !(navigator.canShare && navigator.canShare({ files: [file] }));
-    const match = store.notesWithTitle(note.card.title)[0];
+    $('#sum-download', dialog).hidden = !files.length;
+    $('#sum-share', dialog).hidden = !(files.length && navigator.canShare && navigator.canShare({ files }));
+    const match = store.notesWithTitle(aiTitleOf(note))[0];
     const cmp = $('#sum-compare', dialog);
     cmp.hidden = !match;
     if (match) cmp.onclick = () => { dialog.close(); location.hash = `#/compare/${match.id}/${note.id}`; };
@@ -635,23 +778,24 @@ function openImageDialog({ topic, history, note: givenNote }) {
   };
 
   $('#sum-download', dialog).onclick = () => {
-    if (!blob) return;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = fileName();
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    files.forEach((file, i) => setTimeout(() => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(file);
+      a.download = file.name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }, i * 300)); // a short gap so the browser allows several downloads
   };
   $('#sum-share', dialog).onclick = async () => {
     try {
-      await navigator.share({ files: [new File([blob], fileName(), { type: 'image/png' })], title: note.card.title });
+      await navigator.share({ files, title: aiTitleOf(note) });
     } catch { /* cancelled */ }
   };
   $('#sum-redo', dialog)?.addEventListener('click', generate);
   $('#sum-delete', dialog)?.addEventListener('click', () => {
     if (!confirm(t('summary.confirmDelete'))) return;
     store.deleteAiNote(note.id);
-    if (note.imageId) images.deleteImage(note.imageId).catch(() => {});
+    store.aiImageIds(note).forEach((id) => images.deleteImage(id).catch(() => {}));
     close();
     toast(t('summary.deleted'));
     if (location.hash.startsWith('#/ai-notes')) aiNotesView();
@@ -693,10 +837,10 @@ function aiNotesView() {
         <button class="ai-note" data-id="${esc(n.id)}" style="--c:${tp?.color || '#888'}">
           <span class="thumb"><img alt="" data-thumb="${esc(n.id)}"></span>
           <span class="ai-note-text">
-            <strong>${esc(n.card.title)}</strong>
-            <small>${tp?.icon || ''} ${esc(tp?.name || '')} · ${t('aiNotes.count', { n: n.card.points.length })} · ${fmtDate(n.at)}</small>
-            ${n.imageId ? `<span class="badge">${t('aiNotes.photoBadge')}</span>` : ''}
-            ${store.notesWithTitle(n.card.title).length ? `<span class="badge">${t('compare.badge')}</span>` : ''}
+            <strong>${esc(aiTitleOf(n))}</strong>
+            <small>${tp?.icon || ''} ${esc(tp?.name || '')} · ${n.card ? t('aiNotes.count', { n: n.card.points.length }) : t('aiNotes.imageCount', { n: store.aiImageIds(n).length })} · ${fmtDate(n.at)}</small>
+            ${n.source === 'upload' ? `<span class="badge">${t('aiNotes.uploadedBadge')}</span>` : n.imageId ? `<span class="badge">${t('aiNotes.photoBadge')}</span>` : ''}
+            ${store.notesWithTitle(aiTitleOf(n)).length ? `<span class="badge">${t('compare.badge')}</span>` : ''}
           </span>
         </button>`;
     }).join('');
@@ -705,7 +849,10 @@ function aiNotesView() {
       const tp = getTopic(n.topic);
       const img = gallery.querySelector(`[data-thumb="${CSS.escape(n.id)}"]`);
       if (!tp || !img) return;
-      img.src = URL.createObjectURL(await canvasBlob(cardCanvas(n, tp)));
+      const blob = n.card
+        ? await canvasBlob(cardCanvas(n, tp))
+        : await images.getImage(store.aiImageIds(n)[0]).catch(() => null);
+      if (blob) img.src = URL.createObjectURL(blob);
     });
     gallery.querySelectorAll('.ai-note').forEach((b) => (b.onclick = () => {
       const n = store.getAiNote(b.dataset.id);
@@ -1066,7 +1213,7 @@ function settingsView() {
     toast(t('toast.settingsSaved'));
   };
   $('#export').onclick = async () => {
-    const ids = store.getAiNotes().map((n) => n.imageId).filter(Boolean);
+    const ids = store.getAiNotes().flatMap(store.aiImageIds);
     const blob = new Blob([store.exportData(await images.exportImages(ids))], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);

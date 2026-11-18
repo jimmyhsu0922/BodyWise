@@ -2,7 +2,7 @@
  * Service Worker: network first, cache as fallback, so the app opens offline
  * (notes still work; the AI tutor needs internet). AI requests are never cached.
  */
-const CACHE = 'body-study-v1';
+const CACHE = 'body-study-v2';
 const SHELL = [
   './',
   'index.html',
@@ -47,8 +47,11 @@ self.addEventListener('fetch', (event) => {
   // Cache our own files and the AI SDK library (version-pinned, never changes).
   if (!sameOrigin && !request.url.startsWith(SDK)) return;
 
+  // Always ask the server whether our own files changed ('no-cache' revalidates),
+  // so after an update the app never mixes old and new files.
+  const fresh = sameOrigin ? fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' }) : fetch(request);
   event.respondWith(
-    fetch(request)
+    fresh
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();
